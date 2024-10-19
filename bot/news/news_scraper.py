@@ -11,16 +11,16 @@ class NewsScraper:
             config = yaml.safe_load(file)
         self.api_key = config['bing_api_key']
         self.assets = config['assets']
-        self.api_url = "https://api.bing.microsoft.com/v7.0/news/search"
+        self.api_url = "https://api.bing.microsoft.com/v7.0/search"  # Bing Web Search API URL
 
     def fetch_news(self, query, count=10):
-        """Fetch news articles from Bing News API."""
+        """Fetch news articles from Bing Web Search API."""
         headers = {"Ocp-Apim-Subscription-Key": self.api_key}
         params = {
             "q": query,
             "count": count,
-            "sortBy": "Date",
-            "freshness": "Day",
+            "responseFilter": "News",  # Filter to get only news results
+            "freshness": "Day",        # Get news from the last day
             "textFormat": "Raw",
             "mkt": "en-US"
         }
@@ -36,12 +36,12 @@ class NewsScraper:
     def _parse_news(self, news_data):
         """Parse and return relevant news articles."""
         articles = []
-        for item in news_data.get('value', []):
+        for item in news_data.get('news', []):  # The 'news' field will have news-related content
             articles.append({
                 'name': item['name'],
                 'url': item['url'],
-                'description': item.get('description', ''),
-                'datePublished': item['datePublished']
+                'description': item.get('snippet', ''),
+                'datePublished': item.get('datePublished', 'Unknown')
             })
         return articles
 
@@ -62,4 +62,3 @@ if __name__ == "__main__":
         print(f"News for {asset}:")
         for article in articles:
             print(f"- {article['name']}: {article['url']}")
-
