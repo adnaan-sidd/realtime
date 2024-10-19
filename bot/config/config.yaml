@@ -7,6 +7,8 @@ metaapi_token: "eyJhbGciOiJSUzUxMiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiIwZWEzYjQwMGVhNmU
 # MetaAPI trading account information
 metaapi_account_id: "86118361-6faf-4d08-bc4e-424c7bf52620"
 
+alpha_vantage_key: "OMYQ4BSAJAZ5EM3K"
+
 # Assets to trade
 assets:
   - EURUSD
