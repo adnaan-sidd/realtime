@@ -13,7 +13,7 @@ twelve_data_key: "78a4877357de43edb122ad1c624a5ad5"
 assets:
   - EURUSD
   - GBPUSD
-  - JPYUSD
+  - USDJPY
   - XAUUSD
 
 # Other configurations

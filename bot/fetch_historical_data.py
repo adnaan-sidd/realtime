@@ -21,8 +21,8 @@ class DataFetcher:
         self.data_folder = 'data'
         os.makedirs(self.data_folder, exist_ok=True)
 
-    # Step 1: Fetch historical data using MetaAPI
-    async def fetch_metaapi_data(self, symbol, timeframe, start_time, end_time):
+    # Fetch historical data using MetaAPI for candles
+    async def fetch_metaapi_candles(self, symbol, timeframe, start_time, end_time):
         try:
             logging.info(f"Connecting to MetaAPI with token: {self.metaapi_token}")
             api = MetaApi(self.metaapi_token)
@@ -31,20 +31,42 @@ class DataFetcher:
             if not account:
                 raise Exception(f"MetaAPI Account not found for symbol {symbol}")
 
-            logging.info(f"Fetching historical data for {symbol} from MetaAPI...")
+            logging.info(f"Fetching historical candle data for {symbol} from MetaAPI...")
             history = await account.get_historical_candles(symbol, timeframe, start_time, end_time)
 
             if history:
-                self.save_to_csv(history, symbol, 'MetaAPI')
+                self.save_to_csv(history, symbol, 'MetaAPI_Candles')
                 return history
             else:
-                logging.warning(f"No historical data returned for {symbol} from MetaAPI.")
+                logging.warning(f"No historical candle data returned for {symbol} from MetaAPI.")
                 return None
         except Exception as e:
-            logging.error(f"MetaAPI fetch failed for {symbol}: {str(e)}")
+            logging.error(f"MetaAPI candle fetch failed for {symbol}: {str(e)}")
             return None
 
-    # Step 2: Fetch historical data using Twelve Data API
+    # Fetch historical ticks using MetaAPI
+    async def fetch_metaapi_ticks(self, symbol, start_time):
+        try:
+            api = MetaApi(self.metaapi_token)
+            account = await api.metatrader_account_api.get_account(self.metaapi_account_id)
+
+            if not account:
+                raise Exception(f"MetaAPI Account not found for symbol {symbol}")
+
+            logging.info(f"Fetching historical tick data for {symbol} from MetaAPI...")
+            ticks = await account.get_historical_ticks(symbol, start_time, 0)
+
+            if ticks:
+                self.save_to_csv(ticks, symbol, 'MetaAPI_Ticks')
+                return ticks
+            else:
+                logging.warning(f"No historical tick data returned for {symbol} from MetaAPI.")
+                return None
+        except Exception as e:
+            logging.error(f"MetaAPI tick fetch failed for {symbol}: {str(e)}")
+            return None
+
+    # Fetch historical data using Twelve Data API
     def fetch_twelve_data(self, symbol):
         try:
             logging.info(f"Connecting to Twelve Data with key: {self.twelve_data_key}")
@@ -66,7 +88,7 @@ class DataFetcher:
             logging.error(f"Twelve Data fetch failed for {symbol}: {str(e)}")
             return None
 
-    # Step 3: Fallback to Yahoo Finance if both MetaAPI and Twelve Data fail
+    # Fallback to Yahoo Finance if both MetaAPI and Twelve Data fail
     def fetch_yahoo_data(self, symbol, start_date, end_date):
         try:
             symbol_yahoo = f"{symbol}=X"
@@ -93,15 +115,21 @@ class DataFetcher:
 
     async def fetch_all_assets(self, start_time, end_time, start_date, end_date):
         for asset in self.assets:
-            logging.info(f"Fetching data for {asset}...")
+            logging.info(f"Fetching candle data for {asset}...")
             # Try fetching from MetaAPI
-            history = await self.fetch_metaapi_data(asset, '1H', start_time, end_time)
-            if not history:
+            candles = await self.fetch_metaapi_candles(asset, '1H', start_time, end_time)
+            if not candles:
                 # Fallback to Twelve Data
-                history = self.fetch_twelve_data(asset)
-            if not history:
+                candles = self.fetch_twelve_data(asset)
+            if not candles:
                 # Fallback to Yahoo Finance
                 self.fetch_yahoo_data(asset, start_date, end_date)
+
+            logging.info(f"Fetching tick data for {asset}...")
+            # Try fetching ticks from MetaAPI
+            ticks = await self.fetch_metaapi_ticks(asset, start_time)
+            if not ticks:
+                logging.warning(f"No tick data found for {asset}.")
 
 if __name__ == "__main__":
     fetcher = DataFetcher()
