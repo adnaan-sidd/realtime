@@ -1,111 +1,110 @@
-# fetch_historical_data.py
-
 import os
 import pandas as pd
 import yfinance as yf
-from alpha_vantage.foreignexchange import ForeignExchange
+import requests
 import asyncio
 from metaapi_cloud_sdk import MetaApi
+import logging
+import yaml
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 
 class DataFetcher:
     def __init__(self, config_path="config/config.yaml"):
-        import yaml
         with open(config_path, 'r') as file:
             config = yaml.safe_load(file)
         self.metaapi_token = config['metaapi_token']
         self.metaapi_account_id = config['metaapi_account_id']
-        self.alpha_vantage_key = config['alpha_vantage_key']
+        self.twelve_data_key = config['twelve_data_key']  # Use Twelve Data API key here
         self.assets = config['assets']
         self.data_folder = 'data'
+        os.makedirs(self.data_folder, exist_ok=True)
 
     # Step 1: Fetch historical data using MetaAPI
     async def fetch_metaapi_data(self, symbol, timeframe, start_time, end_time):
-        """Fetch historical data from MetaAPI."""
         try:
+            logging.info(f"Connecting to MetaAPI with token: {self.metaapi_token}")
             api = MetaApi(self.metaapi_token)
             account = await api.metatrader_account_api.get_account(self.metaapi_account_id)
 
             if not account:
                 raise Exception(f"MetaAPI Account not found for symbol {symbol}")
 
+            logging.info(f"Fetching historical data for {symbol} from MetaAPI...")
             history = await account.get_historical_candles(symbol, timeframe, start_time, end_time)
+
             if history:
                 self.save_to_csv(history, symbol, 'MetaAPI')
                 return history
+            else:
+                logging.warning(f"No historical data returned for {symbol} from MetaAPI.")
+                return None
         except Exception as e:
-            print(f"MetaAPI fetch failed for {symbol}: {str(e)}")
+            logging.error(f"MetaAPI fetch failed for {symbol}: {str(e)}")
             return None
 
-    # Step 2: Fallback to Alpha Vantage if MetaAPI fails
-    def fetch_alpha_vantage_data(self, symbol):
-        """Fetch historical data from Alpha Vantage."""
+    # Step 2: Fetch historical data using Twelve Data API
+    def fetch_twelve_data(self, symbol):
         try:
-            fx = ForeignExchange(key=self.alpha_vantage_key)
-            symbol_mapped = self.map_asset_to_alpha_vantage(symbol)
-            data, _ = fx.get_currency_exchange_intraday(symbol_mapped, interval='60min', outputsize='full')
-            df = pd.DataFrame.from_dict(data, orient='index')
-            df.columns = ['open', 'high', 'low', 'close']
-            df.index = pd.to_datetime(df.index)
-            df['volume'] = 0  # Alpha Vantage doesn't provide volume for forex
-            self.save_to_csv(df, symbol, 'AlphaVantage')
-            return df
+            logging.info(f"Connecting to Twelve Data with key: {self.twelve_data_key}")
+            url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval=1h&apikey={self.twelve_data_key}&outputsize=500"
+            response = requests.get(url)
+            data = response.json()
+
+            if 'values' in data:
+                df = pd.DataFrame(data['values'])
+                df['datetime'] = pd.to_datetime(df['datetime'])
+                df.set_index('datetime', inplace=True)
+                df.rename(columns={'open': 'open', 'high': 'high', 'low': 'low', 'close': 'close'}, inplace=True)
+                self.save_to_csv(df, symbol, 'TwelveData')
+                return df
+            else:
+                logging.warning(f"Twelve Data returned no data for {symbol}: {data.get('message', 'No message')}")
+                return None
         except Exception as e:
-            print(f"Alpha Vantage fetch failed for {symbol}: {str(e)}")
+            logging.error(f"Twelve Data fetch failed for {symbol}: {str(e)}")
             return None
 
-    # Step 3: Fallback to Yahoo Finance (yfinance) if both MetaAPI and Alpha Vantage fail
+    # Step 3: Fallback to Yahoo Finance if both MetaAPI and Twelve Data fail
     def fetch_yahoo_data(self, symbol, start_date, end_date):
-        """Fetch historical data from Yahoo Finance."""
         try:
-            symbol_yahoo = f"{symbol}=X"  # Convert to Yahoo format, e.g., 'EURUSD=X'
+            symbol_yahoo = f"{symbol}=X"
+            logging.info(f"Fetching historical data for {symbol} from Yahoo Finance...")
             data = yf.download(symbol_yahoo, start=start_date, end=end_date, interval='1h')
             if not data.empty:
                 self.save_to_csv(data, symbol, 'YahooFinance')
                 return data
             else:
-                print(f"Yahoo Finance returned no data for {symbol}.")
+                logging.warning(f"Yahoo Finance returned no data for {symbol}.")
                 return None
         except Exception as e:
-            print(f"Yahoo Finance fetch failed for {symbol}: {str(e)}")
+            logging.error(f"Yahoo Finance fetch failed for {symbol}: {str(e)}")
             return None
 
-    def map_asset_to_alpha_vantage(self, symbol):
-        """Map asset symbols for Alpha Vantage (e.g., EURUSD -> EUR/USD)."""
-        mapping = {
-            'EURUSD': 'EUR/USD',
-            'GBPUSD': 'GBP/USD',
-            'JPYUSD': 'JPY/USD',
-            'XAUUSD': 'XAU/USD'
-        }
-        return mapping.get(symbol, symbol)
-
     def save_to_csv(self, data, symbol, source):
-        """Save fetched data to a CSV file."""
         output_path = os.path.join(self.data_folder, f"{symbol}_data_{source}.csv")
         if isinstance(data, pd.DataFrame):
             data.to_csv(output_path)
         else:
             df = pd.DataFrame(data)
             df.to_csv(output_path)
-        print(f"Data for {symbol} saved from {source} to {output_path}")
+        logging.info(f"Data for {symbol} saved from {source} to {output_path}")
 
     async def fetch_all_assets(self, start_time, end_time, start_date, end_date):
-        """Fetch data for all assets using MetaAPI first, then fallback to Alpha Vantage or Yahoo Finance."""
         for asset in self.assets:
-            print(f"Fetching data for {asset}...")
+            logging.info(f"Fetching data for {asset}...")
             # Try fetching from MetaAPI
             history = await self.fetch_metaapi_data(asset, '1H', start_time, end_time)
             if not history:
-                # Fallback to Alpha Vantage
-                history = self.fetch_alpha_vantage_data(asset)
+                # Fallback to Twelve Data
+                history = self.fetch_twelve_data(asset)
             if not history:
                 # Fallback to Yahoo Finance
                 self.fetch_yahoo_data(asset, start_date, end_date)
 
-# Example usage
 if __name__ == "__main__":
     fetcher = DataFetcher()
-    # Define time range for historical data fetching
     start_time = '2023-01-01T00:00:00Z'
     end_time = '2023-12-31T23:59:59Z'
     start_date = '2023-01-01'
