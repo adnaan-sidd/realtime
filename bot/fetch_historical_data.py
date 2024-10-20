@@ -3,6 +3,7 @@ import yaml
 import asyncio
 from datetime import datetime
 import csv
+import pandas as pd
 from metaapi_cloud_sdk import MetaApi
 
 # Load configuration from config.yaml
@@ -16,6 +17,7 @@ mt5_account_id = config['mt5_account_id']
 mt4_account_id = config['mt4_account_id']
 symbols = config['assets']
 domain = os.getenv('DOMAIN') or 'agiliumtrade.agiliumtrade.ai'
+resample_frequency = config.get('resample_frequency', '5min')  # Default to 5 minutes if not specified
 
 async def retrieve_historical_ticks(api, account_id, symbol):
     try:
@@ -70,6 +72,30 @@ async def retrieve_historical_candles(api, account_id, symbol):
     except Exception as err:
         return []
 
+def resample_data(data, frequency):
+    df = pd.DataFrame(data)
+    df['time'] = pd.to_datetime(df['time'])
+    df.set_index('time', inplace=True)
+    
+    # Ensure that the necessary columns exist in the dataframe before resampling
+    if 'volume' not in df.columns:
+        df['volume'] = 0
+    
+    resampled = df.resample(frequency).agg({
+        'bid': 'ohlc',
+        'ask': 'ohlc',
+        'volume': 'sum'
+    })
+    resampled.columns = ['_'.join(col).strip() for col in resampled.columns.values]
+    resampled.reset_index(inplace=True)
+    
+    # Ensure all required columns are present after resampling
+    for col in ['bid_open', 'bid_high', 'bid_low', 'bid_close', 'ask_open', 'ask_high', 'ask_low', 'ask_close', 'volume']:
+        if col not in resampled.columns:
+            resampled[col] = None
+    
+    return resampled
+
 async def fetch_data_for_symbol(symbol, mt5_api, mt4_api):
     ticks = await retrieve_historical_ticks(mt5_api, mt5_account_id, symbol)
     candles = await retrieve_historical_candles(mt4_api, mt4_account_id, symbol)
@@ -99,6 +125,9 @@ async def main():
     for symbol, data in combined_data.items():
         file_path = f'data/{symbol}.csv'
         
+        # Resample tick data
+        resampled_ticks = resample_data(data['ticks'], resample_frequency)
+        
         # Check if file exists, if not create it and write headers
         file_exists = os.path.isfile(file_path)
         
@@ -107,17 +136,17 @@ async def main():
             
             # Write headers if file does not exist
             if not file_exists:
-                writer.writerow(['Type', 'Time', 'Bid', 'Ask', 'Volume'])
+                writer.writerow(['Type', 'Time', 'Bid_Open', 'Bid_High', 'Bid_Low', 'Bid_Close', 'Ask_Open', 'Ask_High', 'Ask_Low', 'Ask_Close', 'Volume'])
             
-            # Write tick data
-            for tick in data['ticks']:
-                writer.writerow(['Tick', tick['time'], tick.get('bid', ''), tick.get('ask', ''), tick.get('volume', '')])
+            # Write resampled tick data
+            for _, row in resampled_ticks.iterrows():
+                writer.writerow(['Tick', row['time'], row['bid_open'], row['bid_high'], row['bid_low'], row['bid_close'], row['ask_open'], row['ask_high'], row['ask_low'], row['ask_close'], row['volume']])
             
             # Write candle data
             for candle in data['candles']:
                 writer.writerow(['Candle', candle['time'], candle['open'], candle['high'], candle['low'], candle['close'], candle.get('volume', '')])
 
-    print("Data has been fetched, combined, and saved successfully.")
+    print("Data has been fetched, resampled, and saved successfully.")
 
 asyncio.run(main())
 
