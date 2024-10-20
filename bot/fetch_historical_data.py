@@ -3,7 +3,7 @@ import yaml
 import asyncio
 from datetime import datetime
 import csv
-import pandas as pd
+import pandas as pd  # Ensure pandas is imported
 from metaapi_cloud_sdk import MetaApi
 
 # Load configuration from config.yaml
