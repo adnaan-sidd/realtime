@@ -22,14 +22,25 @@ class DataPreprocessor:
         
         # Load CSV and rename columns to standard names
         df = pd.read_csv(file_path)
-        df.columns = ['Type', 'Time', 'Bid_Open', 'Bid_High', 'Bid_Low', 'Bid_Close', 
-                      'Ask_Open', 'Ask_High', 'Ask_Low', 'Ask_Close', 'Volume']
+        
+        # Assuming the CSV has columns: Type, Time, Open, High, Low, Close, Volume
+        df.columns = ['Type', 'Time', 'Open', 'High', 'Low', 'Close', 'Volume']
         
         # Convert 'Time' column to datetime
-        df['Time'] = pd.to_datetime(df['Time'])
+        df['Time'] = pd.to_datetime(df['Time'], utc=True)
         
         # Set 'Time' as the index
         df.set_index('Time', inplace=True)
+        
+        # Create Bid and Ask columns (since we don't have separate Bid and Ask data)
+        df['Bid_Open'] = df['Open']
+        df['Bid_High'] = df['High']
+        df['Bid_Low'] = df['Low']
+        df['Bid_Close'] = df['Close']
+        df['Ask_Open'] = df['Open']
+        df['Ask_High'] = df['High']
+        df['Ask_Low'] = df['Low']
+        df['Ask_Close'] = df['Close']
         
         # Ensure numeric types for aggregation (handling non-numeric values)
         numeric_columns = ['Bid_Open', 'Bid_High', 'Bid_Low', 'Bid_Close', 
@@ -44,12 +55,24 @@ class DataPreprocessor:
         df = df[['Bid_Open', 'Bid_High', 'Bid_Low', 'Bid_Close', 
                  'Ask_Open', 'Ask_High', 'Ask_Low', 'Ask_Close', 'Volume']]
         
+        # Convert resample_frequency to pandas offset string
+        if self.resample_frequency[-1] == 'T':
+            resample_freq = self.resample_frequency[:-1] + 'min'
+        else:
+            resample_freq = self.resample_frequency
+        
         # Resample data using the OHLC method for bid and ask prices
-        df_resampled = df.resample(self.resample_frequency).ohlc()
-        df_resampled['Volume'] = df['Volume'].resample(self.resample_frequency).sum()
-
-        # Flatten the MultiIndex columns after resampling
-        df_resampled.columns = ['_'.join(col).strip() for col in df_resampled.columns.values]
+        df_resampled = df.resample(resample_freq).agg({
+            'Bid_Open': 'first',
+            'Bid_High': 'max',
+            'Bid_Low': 'min',
+            'Bid_Close': 'last',
+            'Ask_Open': 'first',
+            'Ask_High': 'max',
+            'Ask_Low': 'min',
+            'Ask_Close': 'last',
+            'Volume': 'sum'
+        })
         
         return df_resampled
 
@@ -62,17 +85,17 @@ class DataPreprocessor:
     def add_features(self, df):
         """Add technical indicators and other derived features."""
         # Calculate percentage returns
-        df['returns'] = df['Bid_Close_close'].pct_change()
+        df['returns'] = df['Bid_Close'].pct_change()
         
         # Moving Average (SMA) for the close price
-        df['SMA_20'] = df['Bid_Close_close'].rolling(window=20).mean()
+        df['SMA_20'] = df['Bid_Close'].rolling(window=20).mean()
         
         # Bollinger Bands
-        df['BB_upper'] = df['SMA_20'] + 2 * df['Bid_Close_close'].rolling(window=20).std()
-        df['BB_lower'] = df['SMA_20'] - 2 * df['Bid_Close_close'].rolling(window=20).std()
+        df['BB_upper'] = df['SMA_20'] + 2 * df['Bid_Close'].rolling(window=20).std()
+        df['BB_lower'] = df['SMA_20'] - 2 * df['Bid_Close'].rolling(window=20).std()
 
         # Relative Strength Index (RSI)
-        delta = df['Bid_Close_close'].diff()
+        delta = df['Bid_Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
         rs = gain / loss
@@ -83,7 +106,7 @@ class DataPreprocessor:
     def normalize_data(self, df):
         """Normalize data (e.g., close price, returns) to [0, 1] for the LSTM model."""
         df_normalized = df.copy()
-        df_normalized['close_normalized'] = (df['Bid_Close_close'] - df['Bid_Close_close'].min()) / (df['Bid_Close_close'].max() - df['Bid_Close_close'].min())
+        df_normalized['close_normalized'] = (df['Bid_Close'] - df['Bid_Close'].min()) / (df['Bid_Close'].max() - df['Bid_Close'].min())
         return df_normalized
 
     def preprocess_asset_data(self, asset):
@@ -111,4 +134,3 @@ class DataPreprocessor:
 if __name__ == "__main__":
     preprocessor = DataPreprocessor()
     preprocessor.preprocess_all_assets()
-
