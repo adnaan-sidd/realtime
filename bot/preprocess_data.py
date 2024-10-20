@@ -31,17 +31,26 @@ class DataPreprocessor:
         # Set 'Time' as the index
         df.set_index('Time', inplace=True)
         
-        # Ensure numeric types for aggregation
+        # Ensure numeric types for aggregation (handling non-numeric values)
         numeric_columns = ['Bid_Open', 'Bid_High', 'Bid_Low', 'Bid_Close', 
                            'Ask_Open', 'Ask_High', 'Ask_Low', 'Ask_Close', 'Volume']
         df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric, errors='coerce')
         
         return df
-    
+
     def resample_data(self, df):
         """Resample data to the configured frequency (e.g., 5 minutes, 1 hour)."""
+        # Ensure that all necessary columns are numeric before resampling
+        df = df[['Bid_Open', 'Bid_High', 'Bid_Low', 'Bid_Close', 
+                 'Ask_Open', 'Ask_High', 'Ask_Low', 'Ask_Close', 'Volume']]
+        
+        # Resample data using the OHLC method for bid and ask prices
         df_resampled = df.resample(self.resample_frequency).ohlc()
         df_resampled['Volume'] = df['Volume'].resample(self.resample_frequency).sum()
+
+        # Flatten the MultiIndex columns after resampling
+        df_resampled.columns = ['_'.join(col).strip() for col in df_resampled.columns.values]
+        
         return df_resampled
 
     def handle_missing_data(self, df):
@@ -53,17 +62,17 @@ class DataPreprocessor:
     def add_features(self, df):
         """Add technical indicators and other derived features."""
         # Calculate percentage returns
-        df['returns'] = df['Bid_Close'].pct_change()
+        df['returns'] = df['Bid_Close_close'].pct_change()
         
         # Moving Average (SMA) for the close price
-        df['SMA_20'] = df['Bid_Close'].rolling(window=20).mean()
+        df['SMA_20'] = df['Bid_Close_close'].rolling(window=20).mean()
         
         # Bollinger Bands
-        df['BB_upper'] = df['SMA_20'] + 2 * df['Bid_Close'].rolling(window=20).std()
-        df['BB_lower'] = df['SMA_20'] - 2 * df['Bid_Close'].rolling(window=20).std()
+        df['BB_upper'] = df['SMA_20'] + 2 * df['Bid_Close_close'].rolling(window=20).std()
+        df['BB_lower'] = df['SMA_20'] - 2 * df['Bid_Close_close'].rolling(window=20).std()
 
         # Relative Strength Index (RSI)
-        delta = df['Bid_Close'].diff()
+        delta = df['Bid_Close_close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
         rs = gain / loss
@@ -74,7 +83,7 @@ class DataPreprocessor:
     def normalize_data(self, df):
         """Normalize data (e.g., close price, returns) to [0, 1] for the LSTM model."""
         df_normalized = df.copy()
-        df_normalized['close_normalized'] = (df['Bid_Close'] - df['Bid_Close'].min()) / (df['Bid_Close'].max() - df['Bid_Close'].min())
+        df_normalized['close_normalized'] = (df['Bid_Close_close'] - df['Bid_Close_close'].min()) / (df['Bid_Close_close'].max() - df['Bid_Close_close'].min())
         return df_normalized
 
     def preprocess_asset_data(self, asset):
