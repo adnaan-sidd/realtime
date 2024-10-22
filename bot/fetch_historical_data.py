@@ -6,6 +6,7 @@ import csv
 import pandas as pd
 import yfinance as yf
 from metaapi_cloud_sdk import MetaApi
+from news.news_scraper import NewsScraper  # Import the NewsScraper class
 
 # Load configuration from config.yaml
 with open('config/config.yaml', 'r') as file:
@@ -83,6 +84,7 @@ async def fetch_data_for_symbol(symbol, mt4_api):
 
 async def main():
     mt4_api = MetaApi(mt4_token, {'domain': domain})
+    news_scraper = NewsScraper()  # Initialize the NewsScraper
 
     combined_data = {}
 
@@ -95,6 +97,9 @@ async def main():
             'yf_data': yf_data,
             'candles': candles
         }
+
+    # Fetch news data for each asset
+    news_data = news_scraper.fetch_asset_news()
 
     # Ensure data directory exists
     if not os.path.exists('data'):
@@ -120,8 +125,17 @@ async def main():
             # Write MetaAPI candle data
             for candle in data['candles']:
                 writer.writerow(['Candle', candle['time'], candle['open'], candle['high'], candle['low'], candle['close'], candle.get('volume', '')])
+        
+        # Save news data to a separate CSV file
+        news_file_path = f'data/{symbol}_news.csv'
+        with open(news_file_path, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['Name', 'URL', 'Description', 'DatePublished'])
+            for article in news_data.get(symbol, []):
+                writer.writerow([article['name'], article['url'], article['description'], article['datePublished']])
 
     print("Data has been fetched, resampled, and saved successfully.")
 
 if __name__ == "__main__":
     asyncio.run(main())
+
