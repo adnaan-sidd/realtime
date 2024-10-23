@@ -6,17 +6,16 @@ import csv
 import pandas as pd
 import yfinance as yf
 from metaapi_cloud_sdk import MetaApi
-from news.news_scraper import NewsScraper  # Import the NewsScraper class
 
 # Load configuration from config.yaml
 with open('config/config.yaml', 'r') as file:
     config = yaml.safe_load(file)
 
 # Define your authentication tokens and account IDs from config.yaml
-mt4_token = config['mt4_token']
-mt4_account_id = config['mt4_account_id']
+mt4_token = config['api_keys']['mt4_token']
+mt4_account_id = config['api_keys']['mt4_account_id']
 symbols = config['assets']
-domain = os.getenv('DOMAIN') or 'agiliumtrade.agiliumtrade.ai'
+domain = config['api_keys'].get('domain', 'agiliumtrade.agiliumtrade.ai')
 resample_frequency = config.get('resample_frequency', '5min')  # Default to 5 minutes if not specified
 
 # Define the period and interval for yfinance data
@@ -35,6 +34,8 @@ def fetch_yfinance_data(symbol):
     print(f"Fetching data for {symbol} from Yahoo Finance...")
     yf_symbol = yf_symbols.get(symbol, symbol)
     data = yf.download(yf_symbol, period=yf_period, interval=yf_interval)
+    print(f"Data for {symbol} from Yahoo Finance:\n{data.head()}")
+    print(f"Columns in the DataFrame: {data.columns}")
     return data
 
 async def retrieve_historical_candles(api, account_id, symbol):
@@ -67,6 +68,12 @@ def resample_data(data, frequency):
     df = data.copy()
     df.index = pd.to_datetime(df.index)
     
+    # Flatten the MultiIndex
+    df.columns = df.columns.get_level_values(0)
+    
+    # Debugging: Print the columns of the DataFrame
+    print(f"Columns in the DataFrame before resampling: {df.columns}")
+
     resampled = df.resample(frequency).agg({
         'Open': 'first',
         'High': 'max',
@@ -84,7 +91,6 @@ async def fetch_data_for_symbol(symbol, mt4_api):
 
 async def main():
     mt4_api = MetaApi(mt4_token, {'domain': domain})
-    news_scraper = NewsScraper()  # Initialize the NewsScraper
 
     combined_data = {}
 
@@ -97,9 +103,6 @@ async def main():
             'yf_data': yf_data,
             'candles': candles
         }
-
-    # Fetch news data for each asset
-    news_data = news_scraper.fetch_asset_news()
 
     # Ensure data directory exists
     if not os.path.exists('data'):
@@ -125,17 +128,8 @@ async def main():
             # Write MetaAPI candle data
             for candle in data['candles']:
                 writer.writerow(['Candle', candle['time'], candle['open'], candle['high'], candle['low'], candle['close'], candle.get('volume', '')])
-        
-        # Save news data to a separate CSV file
-        news_file_path = f'data/{symbol}_news.csv'
-        with open(news_file_path, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(['Name', 'URL', 'Description', 'DatePublished'])
-            for article in news_data.get(symbol, []):
-                writer.writerow([article['name'], article['url'], article['description'], article['datePublished']])
 
     print("Data has been fetched, resampled, and saved successfully.")
 
 if __name__ == "__main__":
     asyncio.run(main())
-
