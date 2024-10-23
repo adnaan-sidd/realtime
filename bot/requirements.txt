@@ -1,6 +1,15 @@
-requests        # For making API requests
-PyYAML          # For loading config files
-pandas          # For data handling and preprocessing
-numpy           # Numerical operations, needed for machine learning and indicators
-scikit-learn    # ML algorithms and data preprocessing
-tensorflow      # LSTM model for price prediction
+PyYAML      
+numpy
+pandas
+scikit-learn
+torch
+transformers
+pytz
+requests
+aiohttp
+matplotlib
+seaborn
+ta
+optuna
+tensorboard
+textblob
