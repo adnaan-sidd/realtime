@@ -108,26 +108,25 @@ async def main():
     if not os.path.exists('data'):
         os.makedirs('data')
 
-    # Save combined data to CSV files
+    # Save data to CSV files, separated by source
     for symbol, data in combined_data.items():
-        file_path = f'data/{symbol}.csv'
-        
-        # Resample yfinance data
+        # Save Yahoo Finance data
+        yf_file_path = f'data/{symbol}_yfinance.csv'
         resampled_yf_data = resample_data(data['yf_data'], resample_frequency)
         
-        with open(file_path, mode='w', newline='') as file:
+        with open(yf_file_path, mode='w', newline='') as file:
             writer = csv.writer(file)
-            
-            # Write headers
-            writer.writerow(['Type', 'Time', 'Open', 'High', 'Low', 'Close', 'Volume'])
-            
-            # Write resampled yfinance data
+            writer.writerow(['Time', 'Open', 'High', 'Low', 'Close', 'Volume'])
             for index, row in resampled_yf_data.iterrows():
-                writer.writerow(['YFinance', index, row['Open'], row['High'], row['Low'], row['Close'], row['Volume']])
-            
-            # Write MetaAPI candle data
+                writer.writerow([index, row['Open'], row['High'], row['Low'], row['Close'], row['Volume']])
+        
+        # Save MetaAPI candle data
+        metaapi_file_path = f'data/{symbol}_metaapi.csv'
+        with open(metaapi_file_path, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['Time', 'Open', 'High', 'Low', 'Close', 'Volume'])
             for candle in data['candles']:
-                writer.writerow(['Candle', candle['time'], candle['open'], candle['high'], candle['low'], candle['close'], candle.get('volume', '')])
+                writer.writerow([candle['time'], candle['open'], candle['high'], candle['low'], candle['close'], candle.get('volume', '')])
 
     print("Data has been fetched, resampled, and saved successfully.")
 
