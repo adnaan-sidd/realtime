@@ -44,8 +44,10 @@ async def retrieve_historical_candles(api, account_id, symbol):
 
         # Wait until account is deployed and connected to broker
         if account.state != 'DEPLOYED':
+            print(f"Deploying account {account_id}...")
             await account.deploy()
         if account.connection_status != 'CONNECTED':
+            print(f"Waiting for account {account_id} to connect...")
             await account.wait_connected()
 
         # Retrieve last 10K 1m candles
@@ -54,10 +56,14 @@ async def retrieve_historical_candles(api, account_id, symbol):
         candles = []
         for i in range(pages):
             new_candles = await account.get_historical_candles(symbol, '1m', start_time)
-            candles.extend(new_candles)
             if new_candles:
+                candles.extend(new_candles)
                 start_time = new_candles[0]['time']
                 start_time = start_time.replace(minute=start_time.minute - 1)
+            else:
+                print(f"No new candles retrieved for {symbol} on page {i}")
+                break
+        print(f"Retrieved {len(candles)} candles for {symbol}")
         return candles
 
     except Exception as err:
