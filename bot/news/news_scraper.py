@@ -7,9 +7,7 @@ from typing import Dict, List, Any
 import logging
 import pandas as pd
 import pytz
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import Pipeline
+from transformers import pipeline
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -66,7 +64,7 @@ class NewsScraper:
         os.makedirs('data', exist_ok=True)
         
         # Initialize the sentiment analysis model
-        self.sentiment_model = self._train_sentiment_model()
+        self.sentiment_pipeline = pipeline("sentiment-analysis")
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load configuration from YAML file."""
@@ -83,37 +81,13 @@ class NewsScraper:
             logger.error(f"Unexpected error loading config file: {e}")
             raise
 
-    def _train_sentiment_model(self):
-        """Train a sentiment analysis model using logistic regression."""
-        # Sample training data
-        training_data = [
-            ("I love this product!", "positive"),
-            ("This is the worst experience ever.", "negative"),
-            ("I feel okay about this.", "neutral"),
-            ("Absolutely fantastic!", "positive"),
-            ("Not good at all.", "negative"),
-            ("It's fine, nothing special.", "neutral")
-        ]
-        
-        texts, labels = zip(*training_data)
-        vectorizer = TfidfVectorizer()
-        classifier = LogisticRegression()
-        
-        pipeline = Pipeline([
-            ('vectorizer', vectorizer),
-            ('classifier', classifier)
-        ])
-        
-        pipeline.fit(texts, labels)
-        return pipeline
-
     def analyze_sentiment(self, text: str) -> Dict[str, float]:
-        """Analyze sentiment of given text using the trained model."""
-        prediction = self.sentiment_model.predict([text])[0]
-        if prediction == 'positive':
-            return {'positive': 1.0, 'negative': 0.0, 'neutral': 0.0}
-        elif prediction == 'negative':
-            return {'positive': 0.0, 'negative': 1.0, 'neutral': 0.0}
+        """Analyze sentiment of given text using BERT model."""
+        result = self.sentiment_pipeline(text)[0]
+        if result['label'] == 'POSITIVE':
+            return {'positive': result['score'], 'negative': 0.0, 'neutral': 1.0 - result['score']}
+        elif result['label'] == 'NEGATIVE':
+            return {'positive': 0.0, 'negative': result['score'], 'neutral': 1.0 - result['score']}
         else:
             return {'positive': 0.0, 'negative': 0.0, 'neutral': 1.0}
 
