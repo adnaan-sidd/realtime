@@ -104,15 +104,14 @@ async def main():
 
     combined_data = {}
 
-    # Retrieve data for each symbol concurrently
-    tasks = [fetch_data_for_symbol(symbol, mt4_api) for symbol in symbols]
-    results = await asyncio.gather(*tasks)
-
-    for symbol, yf_data, candles in results:
-        combined_data[symbol] = {
-            'yf_data': yf_data,
-            'candles': candles
-        }
+    # Retrieve data for a single symbol for testing
+    symbol = symbols[0]
+    print(f"Fetching data for symbol: {symbol}")
+    symbol, yf_data, candles = await fetch_data_for_symbol(symbol, mt4_api)
+    combined_data[symbol] = {
+        'yf_data': yf_data,
+        'candles': candles
+    }
 
     # Ensure data directory exists
     if not os.path.exists('data'):
