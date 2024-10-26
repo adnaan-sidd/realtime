@@ -43,27 +43,31 @@ async def retrieve_historical_candles(api, account_id, symbol):
         account = await api.metatrader_account_api.get_account(account_id)
 
         # Wait until account is deployed and connected to broker
+        print('Deploying account')
         if account.state != 'DEPLOYED':
-            print(f"Deploying account {account_id}...")
             await account.deploy()
+        else:
+            print('Account already deployed')
+        print('Waiting for API server to connect to broker (may take couple of minutes)')
         if account.connection_status != 'CONNECTED':
-            print(f"Waiting for account {account_id} to connect...")
             await account.wait_connected()
 
         # Retrieve last 10K 1m candles
         pages = 10
+        print(f'Downloading {pages}K latest candles for {symbol}')
         start_time = None
         candles = []
         for i in range(pages):
             new_candles = await account.get_historical_candles(symbol, '1m', start_time)
+            print(f'Downloaded {len(new_candles) if new_candles else 0} historical candles for {symbol}')
             if new_candles:
                 candles.extend(new_candles)
                 start_time = new_candles[0]['time']
                 start_time = start_time.replace(minute=start_time.minute - 1)
+                print(f'First candle time is {start_time}')
             else:
-                print(f"No new candles retrieved for {symbol} on page {i}")
                 break
-        print(f"Retrieved {len(candles)} candles for {symbol}")
+        print(f'Retrieved {len(candles)} candles for {symbol}')
         return candles
 
     except Exception as err:
