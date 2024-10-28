@@ -13,3 +13,6 @@ ta
 optuna
 tensorboard
 textblob
+metaapi-cloud-sdk
+tensorflow
+yfinance
