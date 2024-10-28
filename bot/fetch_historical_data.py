@@ -1,143 +1,80 @@
 import os
 import yaml
-import asyncio
-from datetime import datetime, timedelta
-import csv
 import pandas as pd
 import yfinance as yf
-from metaapi_cloud_sdk import MetaApi
+from typing import Dict
 
-# Load configuration from config.yaml
+# Load configuration
 with open('config/config.yaml', 'r') as file:
     config = yaml.safe_load(file)
 
-# Define your authentication tokens and account IDs from config.yaml
-mt4_token = config['api_keys']['mt4_token']
-mt4_account_id = config['api_keys']['mt4_account_id']
 symbols = config['assets']
-domain = config['api_keys'].get('domain', 'agiliumtrade.agiliumtrade.ai')
-resample_frequency = config.get('resample_frequency', '5min')  # Default to 5 minutes if not specified
+resample_frequency = config.get('resample_frequency', '1h')
 
-# Define the period and interval for yfinance data
-yf_period = '1y'  # Last 1 year
-yf_interval = '1h'  # 1-hour interval
+yf_period = '2y'
+yf_interval = '1h'
 
-# Mapping of MetaTrader symbols to Yahoo Finance symbols
 yf_symbols = {
-    'XAUUSD': 'GC=F',  # Gold futures
+    'XAUUSD': 'GC=F',
     'EURUSD': 'EURUSD=X',
     'GBPUSD': 'GBPUSD=X',
     'USDJPY': 'USDJPY=X'
 }
 
-def fetch_yfinance_data(symbol):
-    print(f"Fetching data for {symbol} from Yahoo Finance...")
-    yf_symbol = yf_symbols.get(symbol, symbol)
-    data = yf.download(yf_symbol, period=yf_period, interval=yf_interval)
-    print(f"Data for {symbol} from Yahoo Finance:\n{data.head()}")
-    print(f"Columns in the DataFrame: {data.columns}")
-    return data
+os.makedirs('data', exist_ok=True)
 
-async def retrieve_historical_candles(api, account_id, symbol):
+def fetch_yfinance_data(symbol: str) -> pd.DataFrame:
+    """Fetch historical data from Yahoo Finance."""
     try:
-        account = await api.metatrader_account_api.get_account(account_id)
+        print(f"Fetching {yf_period} of data for {symbol} from Yahoo Finance...")
+        yf_symbol = yf_symbols.get(symbol, symbol)
+        data = yf.download(yf_symbol, period=yf_period, interval=yf_interval)
+        
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(1)
+        data.columns = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
+        
+        print(f"Successfully fetched Yahoo Finance data for {symbol}")
+        return data
+    except Exception as e:
+        print(f"Error fetching data for {symbol} from Yahoo Finance: {e}")
+        return pd.DataFrame()
 
-        # Wait until account is deployed and connected to broker
-        print('Deploying account')
-        if account.state != 'DEPLOYED':
-            await account.deploy()
+def resample_data(data: pd.DataFrame, frequency: str) -> pd.DataFrame:
+    """Resample data to specified frequency."""
+    if not data.empty:
+        data.index = pd.to_datetime(data.index)
+        return data.resample(frequency).agg({
+            'Open': 'first',
+            'High': 'max',
+            'Low': 'min',
+            'Close': 'last',
+            'Volume': 'sum'
+        })
+    return pd.DataFrame()
+
+def save_to_csv(data: pd.DataFrame, symbol: str):
+    """Save Yahoo Finance data to CSV file."""
+    if not data.empty:
+        filepath = f'data/{symbol}_yfinance.csv'
+        data.to_csv(filepath)
+        print(f"Saved Yahoo Finance data for {symbol} to {filepath}")
+
+def main():
+    """Main execution function."""
+    print("Starting historical data retrieval for all symbols...")
+    
+    for symbol in symbols:
+        print(f"\nProcessing {symbol}...")
+        yf_data = fetch_yfinance_data(symbol)
+        
+        if not yf_data.empty:
+            resampled_data = resample_data(yf_data, resample_frequency)
+            save_to_csv(resampled_data, symbol)
         else:
-            print('Account already deployed')
-        print('Waiting for API server to connect to broker (may take couple of minutes)')
-        if account.connection_status != 'CONNECTED':
-            await account.wait_connected()
-
-        # Retrieve last 10K 1m candles
-        pages = 10
-        print(f'Downloading {pages}K latest candles for {symbol}')
-        start_time = None
-        candles = []
-        for i in range(pages):
-            new_candles = await account.get_historical_candles(symbol, '1m', start_time)
-            print(f'Downloaded {len(new_candles) if new_candles else 0} historical candles for {symbol}')
-            if new_candles:
-                candles.extend(new_candles)
-                start_time = new_candles[0]['time']
-                start_time = start_time.replace(minute=start_time.minute - 1)
-                print(f'First candle time is {start_time}')
-            else:
-                break
-        print(f'Retrieved {len(candles)} candles for {symbol}')
-        return candles
-
-    except Exception as err:
-        print(f"Error retrieving candles for {symbol}: {err}")
-        return []
-
-def resample_data(data, frequency):
-    df = data.copy()
-    df.index = pd.to_datetime(df.index)
+            print(f"No data available for {symbol}")
     
-    # Flatten the MultiIndex
-    df.columns = df.columns.get_level_values(0)
-    
-    # Debugging: Print the columns of the DataFrame
-    print(f"Columns in the DataFrame before resampling: {df.columns}")
-
-    resampled = df.resample(frequency).agg({
-        'Open': 'first',
-        'High': 'max',
-        'Low': 'min',
-        'Close': 'last',
-        'Volume': 'sum'
-    })
-    
-    return resampled
-
-async def fetch_data_for_symbol(symbol, mt4_api):
-    yf_data = fetch_yfinance_data(symbol)
-    candles = await retrieve_historical_candles(mt4_api, mt4_account_id, symbol)
-    return symbol, yf_data, candles
-
-async def main():
-    mt4_api = MetaApi(mt4_token, {'domain': domain})
-
-    combined_data = {}
-
-    # Retrieve data for a single symbol for testing
-    symbol = symbols[0]
-    print(f"Fetching data for symbol: {symbol}")
-    symbol, yf_data, candles = await fetch_data_for_symbol(symbol, mt4_api)
-    combined_data[symbol] = {
-        'yf_data': yf_data,
-        'candles': candles
-    }
-
-    # Ensure data directory exists
-    if not os.path.exists('data'):
-        os.makedirs('data')
-
-    # Save data to CSV files, separated by source
-    for symbol, data in combined_data.items():
-        # Save Yahoo Finance data
-        yf_file_path = f'data/{symbol}_yfinance.csv'
-        resampled_yf_data = resample_data(data['yf_data'], resample_frequency)
-        
-        with open(yf_file_path, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(['Time', 'Open', 'High', 'Low', 'Close', 'Volume'])
-            for index, row in resampled_yf_data.iterrows():
-                writer.writerow([index, row['Open'], row['High'], row['Low'], row['Close'], row['Volume']])
-        
-        # Save MetaAPI candle data
-        metaapi_file_path = f'data/{symbol}_metaapi.csv'
-        with open(metaapi_file_path, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(['Time', 'Open', 'High', 'Low', 'Close', 'Volume'])
-            for candle in data['candles']:
-                writer.writerow([candle['time'], candle['open'], candle['high'], candle['low'], candle['close'], candle.get('volume', '')])
-
-    print("Data has been fetched, resampled, and saved successfully.")
+    print("\nHistorical data retrieval completed for all symbols.")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

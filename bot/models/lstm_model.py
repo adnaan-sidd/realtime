@@ -1,118 +1,129 @@
 import numpy as np
-import pandas as pd
-from sklearn.preprocessing import MinMaxScaler
+import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 from sklearn.model_selection import train_test_split
 import os
-import traceback
+import pickle
+import json
 
-class LSTMModel:
-    def __init__(self, data_folder="data", model_folder="models", max_lookback=50, min_lookback=5):
-        self.data_folder = data_folder
-        self.model_folder = model_folder
-        self.max_lookback = max_lookback
-        self.min_lookback = min_lookback
-        self.scaler = MinMaxScaler(feature_range=(0, 1))
+def create_lstm_model(input_shape: tuple, units: list = [128, 64, 32], dropout_rate: float = 0.2) -> tf.keras.Model:
+    """
+    Create LSTM model architecture.
+    """
+    model = Sequential()
+    
+    # First LSTM layer
+    model.add(LSTM(units[0], return_sequences=True, input_shape=input_shape))
+    model.add(Dropout(dropout_rate))
+    
+    # Middle LSTM layers
+    for unit in units[1:-1]:
+        model.add(LSTM(unit, return_sequences=True))
+        model.add(Dropout(dropout_rate))
+    
+    # Final LSTM layer
+    model.add(LSTM(units[-1]))
+    model.add(Dropout(dropout_rate))
+    
+    # Output layer
+    model.add(Dense(1))
+    
+    return model
 
-    def load_data(self, asset):
-        """Load preprocessed data for the asset and prepare it for LSTM."""
-        file_path = os.path.join(self.data_folder, f"{asset}_processed.csv")
-        abs_file_path = os.path.abspath(file_path)
-        print(f"Attempting to load file: {abs_file_path}")
-        
-        if not os.path.exists(abs_file_path):
-            print(f"Current working directory: {os.getcwd()}")
-            print(f"Contents of {os.path.dirname(abs_file_path)}:")
-            print(os.listdir(os.path.dirname(abs_file_path)))
-            raise FileNotFoundError(f"Processed data not found for {asset} at {abs_file_path}")
+def train_model(symbol: str, epochs: int = 100, batch_size: int = 32, validation_split: float = 0.2, early_stopping_patience: int = 10):
+    """
+    Train LSTM model using preprocessed data or load an existing model if already trained.
+    """
+    model_path = f'models/{symbol}_best_model.keras'
 
-        df = pd.read_csv(abs_file_path)
-        print(f"Data loaded for {asset}. Shape: {df.shape}")
-        print(f"Columns: {df.columns.tolist()}")
-        return df
-
-    def prepare_data(self, df, feature='close_normalized'):
-        """Prepare data for LSTM model with dynamic lookback period."""
-        if feature not in df.columns:
-            raise ValueError(f"Feature '{feature}' not found in DataFrame. Available columns: {df.columns.tolist()}")
-        
-        data = df[feature].values.reshape(-1, 1)
-        scaled_data = self.scaler.fit_transform(data)
-
-        # Dynamically adjust lookback period
-        lookback = min(self.max_lookback, max(self.min_lookback, len(scaled_data) // 10))
-        print(f"Using lookback period of {lookback}")
-
-        X, y = [], []
-        for i in range(lookback, len(scaled_data)):
-            X.append(scaled_data[i - lookback:i, 0])
-            y.append(scaled_data[i, 0])
-
-        if len(X) == 0:
-            raise ValueError(f"Not enough data to create sequences. Data length: {len(scaled_data)}, Minimum required: {self.min_lookback + 1}")
-
-        X, y = np.array(X), np.array(y)
-        print(f"Prepared data shapes before reshaping - X: {X.shape}, y: {y.shape}")
-        
-        X = np.reshape(X, (X.shape[0], X.shape[1], 1))
-        print(f"Prepared data shapes after reshaping - X: {X.shape}, y: {y.shape}")
-        return X, y, lookback
-
-    def build_model(self, lookback):
-        """Build and compile the LSTM model."""
-        model = Sequential()
-        model.add(LSTM(units=50, return_sequences=True, input_shape=(lookback, 1)))
-        model.add(Dropout(0.2))
-        model.add(LSTM(units=50, return_sequences=False))
-        model.add(Dropout(0.2))
-        model.add(Dense(units=25))
-        model.add(Dense(units=1))
-        model.compile(optimizer='adam', loss='mean_squared_error')
+    # Check if the model already exists and load it to avoid retraining
+    if os.path.exists(model_path):
+        print(f"Model for {symbol} already trained. Loading the model from {model_path}.")
+        model = tf.keras.models.load_model(model_path)
         return model
 
-    def train_model(self, asset, epochs=10, batch_size=32):
-        """Train the LSTM model on the asset's data."""
-        df = self.load_data(asset)
-        X, y, lookback = self.prepare_data(df)
+    # Load preprocessed data
+    X = np.load(f'data/{symbol}_X.npy')
+    y = np.load(f'data/{symbol}_y.npy')
+    
+    # Split data into training and testing sets
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+    
+    # Create model
+    model = create_lstm_model(input_shape=(X.shape[1], X.shape[2]))
+    
+    # Compile model
+    model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+    
+    # Create callbacks
+    callbacks = [
+        EarlyStopping(monitor='val_loss', patience=early_stopping_patience, restore_best_weights=True),
+        ModelCheckpoint(model_path, monitor='val_loss', save_best_only=True)  # Save model with .keras extension
+    ]
+    
+    # Train model
+    history = model.fit(
+        X_train, y_train,
+        epochs=epochs,
+        batch_size=batch_size,
+        validation_split=validation_split,
+        callbacks=callbacks,
+        verbose=1
+    )
+    
+    # Evaluate model
+    test_loss, test_mae = model.evaluate(X_test, y_test, verbose=0)
+    print(f"\nTest Loss for {symbol}: {test_loss:.4f}")
+    print(f"Test MAE for {symbol}: {test_mae:.4f}")
+    
+    # Save training history
+    with open(f'models/{symbol}_training_history.json', 'w') as f:
+        json.dump(history.history, f)
+    
+    return model
 
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+def make_predictions(symbol: str):
+    """
+    Make predictions using the trained model.
+    """
+    model_path = f'models/{symbol}_best_model.keras'
+    if not os.path.exists(model_path):
+        print(f"No model found for {symbol}. Please train the model first.")
+        return
 
-        model = self.build_model(lookback)
-        print(f"Training LSTM model for {asset}...")
-        model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size, validation_data=(X_test, y_test))
+    # Load the trained model
+    model = tf.keras.models.load_model(model_path)
 
-        model_path = os.path.join(self.model_folder, f"lstm_{asset}.h5")
-        model.save(model_path)
-        print(f"Model saved to {model_path}")
+    # Load test data and scalers
+    X = np.load(f'data/{symbol}_X.npy')
+    with open(f'data/{symbol}_scalers.pkl', 'rb') as f:
+        scalers = pickle.load(f)
+    close_scaler = scalers['Close']
+    
+    # Use last 20% of data for testing
+    _, X_test, _, _ = train_test_split(X, X, test_size=0.2, shuffle=False)
+    
+    # Predict and inverse-transform
+    predictions = model.predict(X_test)
+    predictions_unscaled = close_scaler.inverse_transform(predictions)
+    
+    return predictions_unscaled
 
-        return model, X_test, y_test
-
-    def predict(self, model, X_test):
-        """Make predictions using the trained model."""
-        predictions = model.predict(X_test)
-        return self.scaler.inverse_transform(predictions)
-
-# Example usage:
 if __name__ == "__main__":
-    lstm_model = LSTMModel()
-    assets = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD']
-
-    for asset in assets:
-        try:
-            print(f"\nProcessing {asset}...")
-            trained_model, X_test, y_test = lstm_model.train_model(asset)
-            predictions = lstm_model.predict(trained_model, X_test)
-            print(f"{asset} Predictions (first 5):")
-            print(predictions[:5])
-
-        except FileNotFoundError as e:
-            print(f"Error for {asset}: {e}")
-            print(f"Please ensure that the processed data file for {asset} exists in the correct location.")
-        except ValueError as e:
-            print(f"Error preparing data for {asset}: {e}")
-        except Exception as e:
-            print(f"An unexpected error occurred for {asset}:")
-            print(traceback.format_exc())  # This will print the full traceback
-
-    print("\nAll assets processed.")
+    os.makedirs('models', exist_ok=True)
+    
+    # Assets to train and predict
+    symbols = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"]
+    
+    for symbol in symbols:
+        # Train the model or load the existing one
+        model = train_model(symbol)
+        
+        # Make predictions with the trained model
+        predictions = make_predictions(symbol)
+        
+        if predictions is not None:
+            # Save predictions for later analysis or use
+            np.save(f'data/{symbol}_predictions.npy', predictions)
