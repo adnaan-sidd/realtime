@@ -51,3 +51,4 @@ news_config:
   update_interval: 3600  # seconds
   retention_days: 7
   max_articles: 100
+sequence_length: 50  # Add this line with an appropriate value

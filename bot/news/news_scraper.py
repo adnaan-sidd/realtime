@@ -1,7 +1,8 @@
 import os
 import yaml
 import json
-import requests
+import aiohttp  # Use aiohttp for asynchronous HTTP requests
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any
 import logging
@@ -91,27 +92,30 @@ class NewsScraper:
         else:
             return {'positive': 0.0, 'negative': 0.0, 'neutral': 1.0}
 
-    def fetch_news(self) -> Dict[str, List[Dict[str, Any]]]:
+    async def fetch_news(self) -> Dict[str, List[Dict[str, Any]]]:
         """Fetch news for all assets."""
         headers = {
             "Ocp-Apim-Subscription-Key": self.subscription_key
         }
         all_news = {}
         
-        for asset in self.assets:
-            asset_news = []
-            for influencer in self.influencers.get(asset, []):
-                query = f"{asset} {influencer}"
-                news = self._fetch_asset_news(query, headers)
+        async with aiohttp.ClientSession() as session:
+            tasks = []
+            for asset in self.assets:
+                for influencer in self.influencers.get(asset, []):
+                    query = f"{asset} {influencer}"
+                    tasks.append(self._fetch_asset_news(session, query, headers))
+            
+            results = await asyncio.gather(*tasks)
+            
+            for asset, news in zip(self.assets, results):
                 if news:
-                    asset_news.extend(news)
-            if asset_news:
-                all_news[asset] = asset_news
+                    all_news[asset] = news
         
         self.process_and_save_news(all_news)
         return all_news
 
-    def _fetch_asset_news(self, query: str, headers: Dict[str, str]) -> List[Dict[str, Any]]:
+    async def _fetch_asset_news(self, session: aiohttp.ClientSession, query: str, headers: Dict[str, str]) -> List[Dict[str, Any]]:
         """Fetch news for a single query using Bing Custom Search."""
         params = {
             "q": query,
@@ -120,27 +124,27 @@ class NewsScraper:
         }
         
         try:
-            response = requests.get(self.api_url, headers=headers, params=params)
-            logger.info(f"Requesting news for query: {query}")
-            
-            if response.status_code == 200:
-                data = response.json()
-                webpages = data.get('webPages', {}).get('value', [])
-                return [
-                    {
-                        'title': webpage['name'],
-                        'description': webpage.get('snippet', ''),
-                        'url': webpage['url'],
-                        'published': webpage.get('dateLastCrawled', ''),
-                        'source': webpage.get('displayUrl', '').split('/')[0],
-                        'timestamp': datetime.now(timezone.utc).isoformat()
-                    }
-                    for webpage in webpages
-                ]
-            else:
-                logger.error(f"Error fetching news for query: {query}: HTTP {response.status_code}")
-                logger.error(f"Response content: {response.text}")
-                return []
+            async with session.get(self.api_url, headers=headers, params=params) as response:
+                logger.info(f"Requesting news for query: {query}")
+                
+                if response.status == 200:
+                    data = await response.json()
+                    webpages = data.get('webPages', {}).get('value', [])
+                    return [
+                        {
+                            'title': webpage['name'],
+                            'description': webpage.get('snippet', ''),
+                            'url': webpage['url'],
+                            'published': webpage.get('dateLastCrawled', ''),
+                            'source': webpage.get('displayUrl', '').split('/')[0],
+                            'timestamp': datetime.now(timezone.utc).isoformat()
+                        }
+                        for webpage in webpages
+                    ]
+                else:
+                    logger.error(f"Error fetching news for query: {query}: HTTP {response.status}")
+                    logger.error(f"Response content: {await response.text()}")
+                    return []
         except Exception as e:
             logger.error(f"Error while fetching news for query: {query}: {e}")
             return []
@@ -207,11 +211,9 @@ class NewsScraper:
             df['positive'] = df['sentiment_scores'].apply(lambda x: x['positive'])
             df['negative'] = df['sentiment_scores'].apply(lambda x: x['negative'])
             df['neutral'] = df['sentiment_scores'].apply(lambda x: x['neutral'])
-
             # Filter data for the last week
             utc_now = datetime.now(pytz.utc)
             recent_df = df[df['timestamp'] > utc_now - timedelta(days=7)]
-
             # Save recent data to CSV
             recent_df.to_csv('data/sentiment_data.csv', index=False)
             logger.info("Data saved to 'data/sentiment_data.csv' for further analysis and plotting.")
@@ -220,4 +222,4 @@ class NewsScraper:
 
 if __name__ == "__main__":
     scraper = NewsScraper()
-    scraper.fetch_news()
+    asyncio.run(scraper.fetch_news())
