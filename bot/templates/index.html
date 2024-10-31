@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        .container { max-width: 800px; margin: auto; padding: 20px; }
+        .section { margin-top: 20px; }
+        .section h2 { border-bottom: 1px solid #333; padding-bottom: 5px; }
+        .trade, .log { border: 1px solid #ddd; padding: 10px; margin: 5px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Trading Dashboard</h1>
+        <div class="section">
+            <h2>Portfolio</h2>
+            <p>Balance: ${{ portfolio["balance"] }}</p>
+            <h3>Open Trades</h3>
+            <div>
+                {% for trade in portfolio["open_trades"] %}
+                    <div class="trade">
+                        <strong>Symbol:</strong> {{ trade["symbol"] }} |
+                        <strong>Volume:</strong> {{ trade["volume"] }} |
+                        <strong>Entry Price:</strong> {{ trade["entry_price"] }} |
+                        <strong>Current Price:</strong> {{ trade["current_price"] }} |
+                        <strong>Status:</strong> {{ trade["status"] }}
+                    </div>
+                {% else %}
+                    <p>No open trades.</p>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Metrics</h2>
+            <pre>{{ portfolio["metrics"] | tojson(indent=2) }}</pre>
+        </div>
+
+        <div class="section">
+            <h2>Recent Logs</h2>
+            <div>
+                {% for log in logs %}
+                    <div class="log">{{ log }}</div>
+                {% else %}
+                    <p>No recent logs.</p>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</body>
+</html>
