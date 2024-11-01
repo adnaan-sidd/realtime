@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trading Dashboard</title>
+    <script src="https://cdn.socket.io/4.0.1/socket.io.min.js"></script>
     <style>
         body { font-family: Arial, sans-serif; }
         .container { max-width: 800px; margin: auto; padding: 20px; }
@@ -17,38 +18,40 @@
         <h1>Trading Dashboard</h1>
         <div class="section">
             <h2>Portfolio</h2>
-            <p>Balance: ${{ portfolio["balance"] }}</p>
+            <p id="balance">Balance: Loading...</p>
             <h3>Open Trades</h3>
-            <div>
-                {% for trade in portfolio["open_trades"] %}
-                    <div class="trade">
-                        <strong>Symbol:</strong> {{ trade["symbol"] }} |
-                        <strong>Volume:</strong> {{ trade["volume"] }} |
-                        <strong>Entry Price:</strong> {{ trade["entry_price"] }} |
-                        <strong>Current Price:</strong> {{ trade["current_price"] }} |
-                        <strong>Status:</strong> {{ trade["status"] }}
-                    </div>
-                {% else %}
-                    <p>No open trades.</p>
-                {% endfor %}
-            </div>
+            <div id="trades">Loading...</div>
         </div>
 
         <div class="section">
             <h2>Metrics</h2>
-            <pre>{{ portfolio["metrics"] | tojson(indent=2) }}</pre>
-        </div>
-
-        <div class="section">
-            <h2>Recent Logs</h2>
-            <div>
-                {% for log in logs %}
-                    <div class="log">{{ log }}</div>
-                {% else %}
-                    <p>No recent logs.</p>
-                {% endfor %}
-            </div>
+            <pre id="metrics">Loading...</pre>
         </div>
     </div>
+
+    <script>
+        const socket = io();
+
+        socket.on("portfolio_update", (data) => {
+            document.getElementById("balance").innerText = `Balance: $${data.balance}`;
+            const tradesDiv = document.getElementById("trades");
+            tradesDiv.innerHTML = "";
+
+            data.open_trades.forEach(trade => {
+                const tradeEl = document.createElement("div");
+                tradeEl.className = "trade";
+                tradeEl.innerHTML = `
+                    <strong>Symbol:</strong> ${trade.symbol} |
+                    <strong>Volume:</strong> ${trade.volume} |
+                    <strong>Entry Price:</strong> ${trade.entry_price} |
+                    <strong>Target Price:</strong> ${trade.target_price} |
+                    <strong>Status:</strong> ${trade.status}
+                `;
+                tradesDiv.appendChild(tradeEl);
+            });
+
+            document.getElementById("metrics").innerText = JSON.stringify(data.metrics, null, 2);
+        });
+    </script>
 </body>
 </html>
