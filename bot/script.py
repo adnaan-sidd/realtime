@@ -3,10 +3,7 @@ import os
 # Define the directory structure
 structure = {
     "data": [
-        "EURUSD_data.csv",
-        "GBPUSD_data.csv",
-        "JPYUSD_data.csv",
-        "XAUUSD_data.csv"
+        
     ],
     "config": [
         "config.yaml"
