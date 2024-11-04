@@ -17,4 +17,4 @@ metaapi-cloud-sdk
 tensorflow
 yfinance
 flask-socketio
-forex-python schedule
+forex-python

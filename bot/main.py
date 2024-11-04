@@ -34,11 +34,11 @@ async def main():
         for symbol in symbols:
             preprocess_data(symbol, sentiment_file, sequence_length=config['model_params']['lstm']['sequence_length'])
 
-        # Train model with new sentiment data
+        # Train model with new sentiment data and generate predictions
+        trader = MetaApiTrader(config)
         for symbol in symbols:
             predictions = train_model(symbol)
             
-            # Safely check if predictions are a float or array
             if isinstance(predictions, (np.ndarray, list)) and len(predictions) > 0:
                 last_prediction = predictions[-1]
                 logger.info(f"Generated signal for {symbol}: {'BUY' if last_prediction > 0 else 'SELL'} (prediction: {last_prediction:.4f})")
@@ -48,8 +48,7 @@ async def main():
             else:
                 logger.warning(f"No valid predictions generated for {symbol}")
 
-        # Run live trading
-        trader = MetaApiTrader(config)
+        # Run live trading and continuous monitoring
         await trader.run()
 
     except Exception as e:
@@ -59,3 +58,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
