@@ -22,13 +22,14 @@ preprocessing:
   train_test_split: 0.2
 
 model_params:
+  confidence_threshold: 0.75
   lstm:
-    epochs: 50
-    batch_size: 32
-    sequence_length: 20
-    units: 50
+    sequence_length: 60
+    layers: [128, 64, 32]
     dropout: 0.2
-  prediction_threshold: 0.0
+    epochs: 100
+    batch_size: 32
+  sequence_length: 50  # Moved inside model_params
 
 strategies:
   ma_crossover:
@@ -47,6 +48,8 @@ risk_management:
   stop_loss: 0.01
   base_position_size: 0.1
   max_position_size: 1.0
+  
+analysis_interval: 1800
 
 news_config:
   update_interval: 3600  # seconds
