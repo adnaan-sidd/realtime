@@ -18,3 +18,4 @@ tensorflow
 yfinance
 flask-socketio
 forex-python
+tf-keras
