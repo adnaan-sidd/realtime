@@ -12,6 +12,10 @@ assets:
   - "USDJPY"
   - "XAUUSD"
 
+resample_frequency: '1h'
+yf_period: '2y'
+yf_interval: '1h'
+
 data_config:
   timeframe: "1h"
   history_period: "2y"
