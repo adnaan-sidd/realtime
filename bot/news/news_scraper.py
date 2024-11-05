@@ -65,6 +65,8 @@ class NewsScraper:
         for attempt in range(retries):
             try:
                 async with session.get(self.api_url, headers=headers, params=params) as response:
+                    logger.info(f"Request URL: {response.url}")
+                    logger.info(f"Response Status: {response.status}")
                     if response.status == 200:
                         data = await response.json()
                         return [{
@@ -74,7 +76,7 @@ class NewsScraper:
                             'timestamp': datetime.now(timezone.utc).isoformat()
                         } for item in data.get('webPages', {}).get('value', [])]
                     else:
-                        logger.error(f"Failed request for {query}, attempt {attempt + 1}")
+                        logger.error(f"Failed request for {query}, attempt {attempt + 1}, status: {response.status}")
             except Exception as e:
                 logger.error(f"Error fetching news for {query}: {e}")
             await asyncio.sleep(2)
@@ -126,3 +128,4 @@ class NewsScraper:
 if __name__ == "__main__":
     scraper = NewsScraper()
     asyncio.run(scraper.fetch_news())
+
