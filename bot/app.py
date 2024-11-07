@@ -3,6 +3,7 @@ from flask_socketio import SocketIO, emit
 import json
 import os
 import time
+import subprocess
 
 app = Flask(__name__)
 socketio = SocketIO(app)
@@ -36,7 +37,27 @@ def handle_connect():
     """Handle client connection."""
     print("Client connected.")
 
+def run_scripts_in_sequence():
+    """Run the required scripts in sequence."""
+    scripts = [
+        "python news/news_scraper.py",
+        "python candles.py",
+        "python yfinance.py",
+        "python preprocess_data.py",
+        "python models/lstm_model.py"
+    ]
+    
+    for script in scripts:
+        process = subprocess.run(script, shell=True)
+        if process.returncode != 0:
+            print(f"Error running script: {script}")
+            break
+
 if __name__ == "__main__":
+    # Run the required scripts in sequence
+    run_scripts_in_sequence()
+    
     # Start emitting updates in the background
     socketio.start_background_task(emit_portfolio_update)
     socketio.run(app, debug=True)
+

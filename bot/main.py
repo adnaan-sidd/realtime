@@ -1,4 +1,3 @@
-##main.py
 import sys
 import os
 import asyncio
@@ -11,8 +10,11 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'news'))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'models')))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'strategies')))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'indicators')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'data_fetchers')))
 
 from news_scraper import NewsScraper
+from candles import fetch_candles_data
+from yfinance import fetch_yfinance_data
 from preprocess_data import preprocess_data
 from lstm_model import train_model
 from metaapi_trader import MetaApiTrader
@@ -29,8 +31,15 @@ async def main():
         scraper = NewsScraper()
         await scraper.fetch_news()
 
-        # Preprocess new sentiment data
+        # Fetch current day's historical candles data
         symbols = config['assets']
+        await fetch_candles_data(symbols)
+
+        # Fetch yfinance data
+        for symbol in symbols:
+            await fetch_yfinance_data(symbol)
+
+        # Preprocess new sentiment data
         sentiment_file = "data/sentiment_data.csv"
         for symbol in symbols:
             preprocess_data(symbol, sentiment_file, sequence_length=config['model_params']['lstm']['sequence_length'])
@@ -38,7 +47,7 @@ async def main():
         # Train model with new sentiment data
         for symbol in symbols:
             predictions = train_model(symbol)
-            
+
             # Safely check if predictions are a float or array
             if isinstance(predictions, (np.ndarray, list)) and len(predictions) > 0:
                 last_prediction = predictions[-1]
@@ -60,3 +69,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+

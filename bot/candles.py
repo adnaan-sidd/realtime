@@ -19,141 +19,173 @@ handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=5)
 handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 logger.addHandler(handler)
 
-# Load configuration
-config_path = os.path.join('config', 'config.yaml')
-with open(config_path, 'r') as file:
-    config = yaml.safe_load(file)
+def load_config():
+    """Load and return configuration from yaml file"""
+    try:
+        config_path = os.path.join('config', 'config.yaml')
+        with open(config_path, 'r') as file:
+            return yaml.safe_load(file)
+    except Exception as e:
+        logger.error(f"Failed to load configuration: {e}")
+        raise
 
-symbols = config['assets']
-yf_period = config['yf_period']
-yf_interval = config['yf_interval']
-
-# Mapping for Yahoo Finance symbols
-yf_symbols = {
-    'XAUUSD': 'GC=F',
-    'EURUSD': 'EURUSD=X',
-    'GBPUSD': 'GBPUSD=X',
-    'USDJPY': 'USDJPY=X'
-}
-
-mt4_token = config['api_keys']['mt4_token']
-mt4_account_id = config['api_keys']['mt4_account_id']
-mt4_domain = config['api_keys']['domain']
-
-# Ensure candles directory exists
-candles_dir = os.path.join('data', 'candles')
-os.makedirs(candles_dir, exist_ok=True)
-
-# Function to clean and validate data before saving
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
+    """Clean and validate candlestick data"""
     df.drop_duplicates(inplace=True)
     df['time'] = pd.to_datetime(df['time'])
     df.sort_values(by='time', inplace=True)
     return df
 
-# Function to initialize MetaApi instance with retry logic
-async def initialize_api():
+async def initialize_api(config):
+    """Initialize MetaAPI with retry logic"""
     retries = 3
     for attempt in range(retries):
         try:
-            api = MetaApi(mt4_token, {'domain': mt4_domain})
+            api = MetaApi(config['api_keys']['mt4_token'], {'domain': config['api_keys']['domain']})
             logger.info("MetaApi instance initialized successfully.")
             return api
         except Exception as e:
             logger.error(f"Attempt {attempt + 1} - Failed to initialize MetaApi: {e}")
             if attempt < retries - 1:
-                await asyncio.sleep(5)  # Wait before retrying
+                await asyncio.sleep(5)
             else:
                 logger.error("Exceeded maximum retry attempts for MetaApi initialization.")
     return None
 
-# Function to fetch historical data in chunks
 async def fetch_data_in_chunks(account, symbol, start_time, end_time):
-    chunk_size = timedelta(days=30)  # Fetch data in 30-day chunks
+    """Fetch historical data in manageable chunks"""
+    chunk_size = timedelta(days=30)
     current_start = start_time
     all_candles = []
 
     while current_start < end_time:
         current_end = min(current_start + chunk_size, end_time)
         logger.info(f'Fetching candles for {symbol} from {current_start} to {current_end}')
-        candles = await account.get_historical_candles(symbol, '1h', current_start, current_end)
-        all_candles.extend(candles)
-        current_start = current_end
+        try:
+            candles = await account.get_historical_candles(symbol, '1h', current_start, current_end)
+            if candles:
+                all_candles.extend(candles)
+            await asyncio.sleep(1)  # Prevent rate limiting
+            current_start = current_end
+        except Exception as e:
+            logger.error(f"Error fetching chunk for {symbol}: {e}")
+            await asyncio.sleep(5)
 
     return all_candles
 
-# Function to fetch historical data up to today and keep fetching every day
-async def retrieve_historical_candles():
-    api = await initialize_api()
+async def fetch_historical_data(account, symbol, candles_dir):
+    """Fetch 2 years of historical data for a symbol"""
+    end_time = datetime.now(pytz.utc)
+    start_time = end_time - timedelta(days=730)  # 2 years of data
+    
+    logger.info(f'Fetching 2 years of historical data for {symbol} from {start_time} to {end_time}')
+    
+    candles = await fetch_data_in_chunks(account, symbol, start_time, end_time)
+    if candles:
+        df = pd.DataFrame(candles)
+        file_path = os.path.join(candles_dir, f'{symbol}_candles.csv')
+        df = clean_data(df)
+        df.to_csv(file_path, index=False)
+        logger.info(f'Saved historical data for {symbol} to {file_path}')
+    return bool(candles)
+
+async def fetch_candles_data(symbols):
+    """Fetch latest candle data for the given symbols"""
+    config = load_config()
+    api = await initialize_api(config)
+    
     if api is None:
-        logger.error("MetaApi instance initialization failed, aborting historical candle retrieval.")
+        logger.error("MetaApi instance initialization failed")
         return
 
     try:
-        account = await api.metatrader_account_api.get_account(mt4_account_id)
+        account = await api.metatrader_account_api.get_account(config['api_keys']['mt4_account_id'])
 
-        # Wait until account is deployed and connected to broker
-        logger.info('Deploying account')
+        # Deploy and connect account if needed
         if account.state != 'DEPLOYED':
+            logger.info('Deploying account...')
             await account.deploy()
-        else:
-            logger.info('Account already deployed')
-        logger.info('Waiting for API server to connect to broker (may take a couple of minutes)')
+        
         if account.connection_status != 'CONNECTED':
+            logger.info('Waiting for broker connection...')
             await account.wait_connected()
 
-        while True:
-            # Retrieve historical candles from 06-11-2022 to today
-            end_time = datetime(2024, 11, 6, tzinfo=pytz.utc)
-            start_time = datetime(2022, 11, 6, tzinfo=pytz.utc)
-            logger.info(f'Downloading historical candles for {symbols} from {start_time} to {end_time}')
+        candles_dir = os.path.join('data', 'candles')
+        os.makedirs(candles_dir, exist_ok=True)
 
-            for symbol in symbols:
+        # Check if historical data exists, if not fetch it first
+        for symbol in symbols:
+            file_path = os.path.join(candles_dir, f'{symbol}_candles.csv')
+            if not os.path.exists(file_path):
+                logger.info(f'No historical data found for {symbol}. Fetching 2 years of data first...')
+                success = await fetch_historical_data(account, symbol, candles_dir)
+                if not success:
+                    logger.error(f'Failed to fetch historical data for {symbol}')
+                    continue
+
+        # Now fetch the latest data
+        end_time = datetime.now(pytz.utc)
+        start_time = end_time - timedelta(days=1)  # Get last 24 hours
+        
+        for symbol in symbols:
+            try:
+                logger.info(f'Fetching latest data for {symbol}')
                 candles = await fetch_data_in_chunks(account, symbol, start_time, end_time)
-                logger.info(f'Downloaded {len(candles)} historical candles for {symbol}')
+                
                 if candles:
-                    df = pd.DataFrame(candles)
-                    df['time'] = pd.to_datetime(df['time'])  # Ensure time is in datetime format
                     file_path = os.path.join(candles_dir, f'{symbol}_candles.csv')
+                    new_df = pd.DataFrame(candles)
                     
-                    # If file exists, append new data; otherwise, create a new file
                     if os.path.exists(file_path):
                         existing_data = pd.read_csv(file_path)
-                        existing_data['time'] = pd.to_datetime(existing_data['time'])  # Convert existing time column to datetime
-                        combined_data = pd.concat([existing_data, df]).drop_duplicates()
+                        existing_data['time'] = pd.to_datetime(existing_data['time'])
+                        combined_data = pd.concat([existing_data, new_df])
+                        combined_data = clean_data(combined_data)
+                        combined_data.to_csv(file_path, index=False)
+                        logger.info(f'Updated data for {symbol}')
                     else:
-                        combined_data = df
-                    
-                    # Clean and validate data
-                    combined_data = clean_data(combined_data)
-                    
-                    # Save to CSV
-                    combined_data.to_csv(file_path, index=False)
-                    logger.info(f'Saved {symbol} candles to {file_path}')
-                    logger.info(f'First candle: {candles[0]}')
-                    logger.info(f'Last candle: {candles[-1]}')
+                        new_df = clean_data(new_df)
+                        new_df.to_csv(file_path, index=False)
+                        logger.info(f'Saved new data for {symbol}')
 
-            logger.info("Historical data update complete. Sleeping until next update.")
-            await asyncio.sleep(24 * 3600)  # Sleep for 24 hours before fetching again
+            except Exception as symbol_err:
+                logger.error(f"Error processing {symbol}: {symbol_err}")
 
     except Exception as err:
-        logger.error(f"Error fetching historical candles: {err}")
+        logger.error(f"Error in fetch_candles_data: {err}")
     finally:
-        # Only close if API was successfully initialized
         if api:
-            logger.info("Closing MetaApi instance.")
             try:
                 await api.close()
             except Exception as close_err:
-                logger.error(f"Error closing MetaApi instance: {close_err}")
-        else:
-            logger.warning("MetaApi instance was not initialized, skipping close.")
-        sys.exit()
+                logger.error(f"Error closing MetaApi connection: {close_err}")
 
-# Run the historical data fetch loop
 if __name__ == "__main__":
+    # When run directly, fetch historical data first
+    async def init_historical_data():
+        config = load_config()
+        api = await initialize_api(config)
+        
+        if api:
+            try:
+                account = await api.metatrader_account_api.get_account(config['api_keys']['mt4_account_id'])
+                
+                if account.state != 'DEPLOYED':
+                    await account.deploy()
+                
+                if account.connection_status != 'CONNECTED':
+                    await account.wait_connected()
+                
+                candles_dir = os.path.join('data', 'candles')
+                os.makedirs(candles_dir, exist_ok=True)
+                
+                for symbol in config['assets']:
+                    await fetch_historical_data(account, symbol, candles_dir)
+                
+            finally:
+                await api.close()
+    
     try:
-        asyncio.run(retrieve_historical_candles())
+        asyncio.run(init_historical_data())
     except KeyboardInterrupt:
-        logger.info("Historical data fetch loop interrupted by user.")
-
+        logger.info("Historical data fetch interrupted by user.")
