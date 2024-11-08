@@ -112,7 +112,7 @@ def prepare_sequences(data: pd.DataFrame, sequence_length: int, target_column: s
             scalers[column] = scaler
 
         X, y = [], []
-        
+
         for i in range(len(scaled_data) - sequence_length):
             X.append(scaled_data[feature_columns].iloc[i:(i + sequence_length)].values)
             y.append(scaled_data[target_column].iloc[i + sequence_length])
@@ -158,7 +158,7 @@ def preprocess_data(symbol: str, sentiment_file: str, sequence_length: int = 60)
         raise
 
 if __name__ == "__main__":
-    symbols = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"]
+    symbols = ["EURUSD", "GBPUSD", "USDJPY", "gold"]
     sentiment_file = "data/sentiment_data.csv"
     sequence_length = 60
 

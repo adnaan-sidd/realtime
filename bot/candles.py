@@ -2,13 +2,12 @@ import os
 import yaml
 import pandas as pd
 import logging
-from time import sleep
 from metaapi_cloud_sdk import MetaApi
 from datetime import datetime, timedelta
 import asyncio
 import pytz
-import sys
 from logging.handlers import RotatingFileHandler
+from concurrent.futures import ThreadPoolExecutor
 
 # Setup logging
 log_file = os.path.join('logs', 'candles.log')
@@ -77,9 +76,9 @@ async def fetch_historical_data(account, symbol, candles_dir):
     """Fetch 2 years of historical data for a symbol"""
     end_time = datetime.now(pytz.utc)
     start_time = end_time - timedelta(days=730)  # 2 years of data
-    
+
     logger.info(f'Fetching 2 years of historical data for {symbol} from {start_time} to {end_time}')
-    
+
     candles = await fetch_data_in_chunks(account, symbol, start_time, end_time)
     if candles:
         df = pd.DataFrame(candles)
@@ -89,11 +88,35 @@ async def fetch_historical_data(account, symbol, candles_dir):
         logger.info(f'Saved historical data for {symbol} to {file_path}')
     return bool(candles)
 
+async def fetch_latest_data(account, symbol, candles_dir):
+    """Fetch the latest candle data for a symbol"""
+    end_time = datetime.now(pytz.utc)
+    start_time = end_time - timedelta(days=1)  # Get last 24 hours
+
+    logger.info(f'Fetching latest data for {symbol}')
+    candles = await fetch_data_in_chunks(account, symbol, start_time, end_time)
+
+    if candles:
+        file_path = os.path.join(candles_dir, f'{symbol}_candles.csv')
+        new_df = pd.DataFrame(candles)
+
+        if os.path.exists(file_path):
+            existing_data = pd.read_csv(file_path)
+            existing_data['time'] = pd.to_datetime(existing_data['time'])
+            combined_data = pd.concat([existing_data, new_df])
+            combined_data = clean_data(combined_data)
+            combined_data.to_csv(file_path, index=False)
+            logger.info(f'Updated data for {symbol}')
+        else:
+            new_df = clean_data(new_df)
+            new_df.to_csv(file_path, index=False)
+            logger.info(f'Saved new data for {symbol}')
+
 async def fetch_candles_data(symbols):
     """Fetch latest candle data for the given symbols"""
     config = load_config()
     api = await initialize_api(config)
-    
+
     if api is None:
         logger.error("MetaApi instance initialization failed")
         return
@@ -105,7 +128,7 @@ async def fetch_candles_data(symbols):
         if account.state != 'DEPLOYED':
             logger.info('Deploying account...')
             await account.deploy()
-        
+
         if account.connection_status != 'CONNECTED':
             logger.info('Waiting for broker connection...')
             await account.wait_connected()
@@ -124,32 +147,8 @@ async def fetch_candles_data(symbols):
                     continue
 
         # Now fetch the latest data
-        end_time = datetime.now(pytz.utc)
-        start_time = end_time - timedelta(days=1)  # Get last 24 hours
-        
         for symbol in symbols:
-            try:
-                logger.info(f'Fetching latest data for {symbol}')
-                candles = await fetch_data_in_chunks(account, symbol, start_time, end_time)
-                
-                if candles:
-                    file_path = os.path.join(candles_dir, f'{symbol}_candles.csv')
-                    new_df = pd.DataFrame(candles)
-                    
-                    if os.path.exists(file_path):
-                        existing_data = pd.read_csv(file_path)
-                        existing_data['time'] = pd.to_datetime(existing_data['time'])
-                        combined_data = pd.concat([existing_data, new_df])
-                        combined_data = clean_data(combined_data)
-                        combined_data.to_csv(file_path, index=False)
-                        logger.info(f'Updated data for {symbol}')
-                    else:
-                        new_df = clean_data(new_df)
-                        new_df.to_csv(file_path, index=False)
-                        logger.info(f'Saved new data for {symbol}')
-
-            except Exception as symbol_err:
-                logger.error(f"Error processing {symbol}: {symbol_err}")
+            await fetch_latest_data(account, symbol, candles_dir)
 
     except Exception as err:
         logger.error(f"Error in fetch_candles_data: {err}")
@@ -165,27 +164,29 @@ if __name__ == "__main__":
     async def init_historical_data():
         config = load_config()
         api = await initialize_api(config)
-        
+
         if api:
             try:
                 account = await api.metatrader_account_api.get_account(config['api_keys']['mt4_account_id'])
-                
+
                 if account.state != 'DEPLOYED':
                     await account.deploy()
-                
+
                 if account.connection_status != 'CONNECTED':
                     await account.wait_connected()
-                
+
                 candles_dir = os.path.join('data', 'candles')
                 os.makedirs(candles_dir, exist_ok=True)
-                
+
                 for symbol in config['assets']:
                     await fetch_historical_data(account, symbol, candles_dir)
-                
+
             finally:
-                await api.close()
-    
+                if api:
+                    await api.close()
+
     try:
         asyncio.run(init_historical_data())
     except KeyboardInterrupt:
         logger.info("Historical data fetch interrupted by user.")
+
