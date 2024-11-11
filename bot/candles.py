@@ -1,192 +1,266 @@
 import os
-import yaml
-import pandas as pd
 import logging
-from metaapi_cloud_sdk import MetaApi
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Dict, Optional, Tuple
+import MetaTrader5 as mt5
+import pandas as pd
 from datetime import datetime, timedelta
-import asyncio
-import pytz
-from logging.handlers import RotatingFileHandler
-from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+import time
 
-# Setup logging
-log_file = os.path.join('logs', 'candles.log')
-os.makedirs('logs', exist_ok=True)
-logging.basicConfig(level=logging.INFO)
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
-handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=5)
-handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-logger.addHandler(handler)
 
-def load_config():
-    """Load and return configuration from yaml file"""
-    try:
-        config_path = os.path.join('config', 'config.yaml')
-        with open(config_path, 'r') as file:
-            return yaml.safe_load(file)
-    except Exception as e:
-        logger.error(f"Failed to load configuration: {e}")
-        raise
+@dataclass
+class MT5Credentials:
+    """Store MT5 connection credentials"""
+    login: int
+    password: str
+    server: str
 
-def clean_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Clean and validate candlestick data"""
-    df.drop_duplicates(inplace=True)
-    df['time'] = pd.to_datetime(df['time'])
-    df.sort_values(by='time', inplace=True)
-    return df
+class MT5Handler:
+    TIMEFRAME_MAP: Dict[str, int] = {
+        'M1': mt5.TIMEFRAME_M1,
+        'M5': mt5.TIMEFRAME_M5,
+        'M15': mt5.TIMEFRAME_M15,
+        'M30': mt5.TIMEFRAME_M30,
+        'H1': mt5.TIMEFRAME_H1,
+        'H4': mt5.TIMEFRAME_H4,
+        'D1': mt5.TIMEFRAME_D1,
+        'W1': mt5.TIMEFRAME_W1,
+        'MN1': mt5.TIMEFRAME_MN1
+    }
 
-async def initialize_api(config):
-    """Initialize MetaAPI with retry logic"""
-    retries = 3
-    for attempt in range(retries):
+    TIMEFRAME_MINUTES: Dict[str, int] = {
+        'M1': 1,
+        'M5': 5,
+        'M15': 15,
+        'M30': 30,
+        'H1': 60,
+        'H4': 240,
+        'D1': 1440,
+        'W1': 10080,
+        'MN1': 43200
+    }
+
+    def __init__(self, credentials: MT5Credentials):
+        self.credentials = credentials
+        self._initialized = False
+
+    def __enter__(self):
+        self.initialize()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.shutdown()
+
+    def initialize(self) -> bool:
+        """Initialize MT5 connection with error handling"""
+        if self._initialized:
+            return True
+
+        success = mt5.initialize(
+            login=self.credentials.login,
+            password=self.credentials.password,
+            server=self.credentials.server
+        )
+
+        if not success:
+            error_code = mt5.last_error()
+            logger.error(f"Failed to initialize MT5: {error_code}")
+            return False
+
+        self._initialized = True
+        logger.info("MT5 connection initialized successfully")
+        return True
+
+    def shutdown(self) -> None:
+        """Safely shutdown MT5 connection"""
+        if self._initialized:
+            mt5.shutdown()
+            self._initialized = False
+            logger.info("MT5 connection closed")
+
+    @classmethod
+    def get_mt5_timeframe(cls, timeframe: str) -> Optional[int]:
+        """Convert string timeframe to MT5 timeframe constant"""
+        return cls.TIMEFRAME_MAP.get(timeframe)
+
+class DataManager:
+    def __init__(self, base_dir: str = 'data'):
+        self.base_dir = base_dir
+        self.candles_dir = os.path.join(base_dir, 'candles')
+        os.makedirs(self.candles_dir, exist_ok=True)
+
+    def get_file_path(self, symbol: str, timeframe: str) -> str:
+        return os.path.join(self.candles_dir, f"{symbol}_{timeframe}.csv")
+
+    def get_last_candle_time(self, symbol: str, timeframe: str) -> Optional[datetime]:
+        """Get the timestamp of the last candle in the existing file"""
+        file_path = self.get_file_path(symbol, timeframe)
+        if not os.path.exists(file_path):
+            return None
+        
         try:
-            api = MetaApi(config['api_keys']['mt4_token'], {'domain': config['api_keys']['domain']})
-            logger.info("MetaApi instance initialized successfully.")
-            return api
+            df = pd.read_csv(file_path)
+            if len(df) == 0:
+                return None
+            return pd.to_datetime(df['time'].iloc[-1])
         except Exception as e:
-            logger.error(f"Attempt {attempt + 1} - Failed to initialize MetaApi: {e}")
-            if attempt < retries - 1:
-                await asyncio.sleep(5)
+            logger.error(f"Error reading file {file_path}: {e}")
+            return None
+
+    def update_data(self, symbol: str, timeframe: str, new_data: pd.DataFrame) -> bool:
+        """Update existing file with new data"""
+        file_path = self.get_file_path(symbol, timeframe)
+        try:
+            if os.path.exists(file_path):
+                existing_data = pd.read_csv(file_path)
+                existing_data['time'] = pd.to_datetime(existing_data['time'])
+                
+                # Combine existing and new data, remove duplicates
+                combined_data = pd.concat([existing_data, new_data])
+                combined_data = combined_data.drop_duplicates(subset=['time'], keep='last')
+                combined_data = combined_data.sort_values('time')
+                
+                # Save updated data
+                combined_data.to_csv(file_path, index=False)
+                logger.info(f"Updated {symbol} {timeframe} with {len(new_data)} new candles")
             else:
-                logger.error("Exceeded maximum retry attempts for MetaApi initialization.")
-    return None
-
-async def fetch_data_in_chunks(account, symbol, start_time, end_time):
-    """Fetch historical data in manageable chunks"""
-    chunk_size = timedelta(days=30)
-    current_start = start_time
-    all_candles = []
-
-    while current_start < end_time:
-        current_end = min(current_start + chunk_size, end_time)
-        logger.info(f'Fetching candles for {symbol} from {current_start} to {current_end}')
-        try:
-            candles = await account.get_historical_candles(symbol, '1h', current_start, current_end)
-            if candles:
-                all_candles.extend(candles)
-            await asyncio.sleep(1)  # Prevent rate limiting
-            current_start = current_end
+                new_data.to_csv(file_path, index=False)
+                logger.info(f"Created new file for {symbol} {timeframe} with {len(new_data)} candles")
+            return True
         except Exception as e:
-            logger.error(f"Error fetching chunk for {symbol}: {e}")
-            await asyncio.sleep(5)
+            logger.error(f"Error updating data for {symbol} {timeframe}: {e}")
+            return False
 
-    return all_candles
-
-async def fetch_historical_data(account, symbol, candles_dir):
-    """Fetch 2 years of historical data for a symbol"""
-    end_time = datetime.now(pytz.utc)
-    start_time = end_time - timedelta(days=730)  # 2 years of data
-
-    logger.info(f'Fetching 2 years of historical data for {symbol} from {start_time} to {end_time}')
-
-    candles = await fetch_data_in_chunks(account, symbol, start_time, end_time)
-    if candles:
-        df = pd.DataFrame(candles)
-        file_path = os.path.join(candles_dir, f'{symbol}_candles.csv')
-        df = clean_data(df)
-        df.to_csv(file_path, index=False)
-        logger.info(f'Saved historical data for {symbol} to {file_path}')
-    return bool(candles)
-
-async def fetch_latest_data(account, symbol, candles_dir):
-    """Fetch the latest candle data for a symbol"""
-    end_time = datetime.now(pytz.utc)
-    start_time = end_time - timedelta(days=1)  # Get last 24 hours
-
-    logger.info(f'Fetching latest data for {symbol}')
-    candles = await fetch_data_in_chunks(account, symbol, start_time, end_time)
-
-    if candles:
-        file_path = os.path.join(candles_dir, f'{symbol}_candles.csv')
-        new_df = pd.DataFrame(candles)
-
-        if os.path.exists(file_path):
-            existing_data = pd.read_csv(file_path)
-            existing_data['time'] = pd.to_datetime(existing_data['time'])
-            combined_data = pd.concat([existing_data, new_df])
-            combined_data = clean_data(combined_data)
-            combined_data.to_csv(file_path, index=False)
-            logger.info(f'Updated data for {symbol}')
-        else:
-            new_df = clean_data(new_df)
-            new_df.to_csv(file_path, index=False)
-            logger.info(f'Saved new data for {symbol}')
-
-async def fetch_candles_data(symbols):
-    """Fetch latest candle data for the given symbols"""
-    config = load_config()
-    api = await initialize_api(config)
-
-    if api is None:
-        logger.error("MetaApi instance initialization failed")
-        return
-
+def fetch_data_range(
+    handler: MT5Handler,
+    symbol: str,
+    timeframe: str,
+    start_date: datetime,
+    end_date: datetime
+) -> Optional[pd.DataFrame]:
+    """Fetch data for a specific date range"""
     try:
-        account = await api.metatrader_account_api.get_account(config['api_keys']['mt4_account_id'])
+        mt5_timeframe = handler.get_mt5_timeframe(timeframe)
+        if mt5_timeframe is None:
+            logger.error(f"Invalid timeframe: {timeframe}")
+            return None
 
-        # Deploy and connect account if needed
-        if account.state != 'DEPLOYED':
-            logger.info('Deploying account...')
-            await account.deploy()
+        rates = mt5.copy_rates_range(symbol, mt5_timeframe, start_date, end_date)
+        if rates is None:
+            logger.error(f"Failed to fetch data for {symbol} {timeframe}")
+            return None
 
-        if account.connection_status != 'CONNECTED':
-            logger.info('Waiting for broker connection...')
-            await account.wait_connected()
+        df = pd.DataFrame(rates)
+        df['time'] = pd.to_datetime(df['time'], unit='s')
+        df['symbol'] = symbol
+        df['timeframe'] = timeframe
+        df['download_time'] = datetime.now()
+        
+        return df
 
-        candles_dir = os.path.join('data', 'candles')
-        os.makedirs(candles_dir, exist_ok=True)
+    except Exception as e:
+        logger.error(f"Error fetching data for {symbol} {timeframe}: {e}")
+        return None
 
-        # Check if historical data exists, if not fetch it first
-        for symbol in symbols:
-            file_path = os.path.join(candles_dir, f'{symbol}_candles.csv')
-            if not os.path.exists(file_path):
-                logger.info(f'No historical data found for {symbol}. Fetching 2 years of data first...')
-                success = await fetch_historical_data(account, symbol, candles_dir)
-                if not success:
-                    logger.error(f'Failed to fetch historical data for {symbol}')
+def update_symbol_data(
+    handler: MT5Handler,
+    data_manager: DataManager,
+    symbol: str,
+    timeframe: str,
+    lookback_days: int = 730  # 2 years default
+) -> bool:
+    """Update data for a single symbol and timeframe"""
+    try:
+        last_candle_time = data_manager.get_last_candle_time(symbol, timeframe)
+        end_date = datetime.now()
+
+        if last_candle_time is None:
+            # No existing data, fetch historical data
+            start_date = end_date - timedelta(days=lookback_days)
+            logger.info(f"Fetching historical data for {symbol} {timeframe}")
+        else:
+            # Fetch only new data since last candle
+            start_date = last_candle_time
+            logger.info(f"Fetching new data for {symbol} {timeframe} since {start_date}")
+
+        df = fetch_data_range(handler, symbol, timeframe, start_date, end_date)
+        if df is None or len(df) == 0:
+            logger.info(f"No new data available for {symbol} {timeframe}")
+            return True  # Not an error condition
+
+        return data_manager.update_data(symbol, timeframe, df)
+
+    except Exception as e:
+        logger.error(f"Error updating {symbol} {timeframe}: {e}")
+        return False
+
+def continuous_data_update(
+    symbols: List[str],
+    timeframes: List[str],
+    credentials: MT5Credentials,
+    update_interval: int = 60,  # seconds
+    max_workers: int = 5
+) -> None:
+    """Continuously update data for all symbols and timeframes"""
+    data_manager = DataManager()
+
+    while True:
+        try:
+            with MT5Handler(credentials) as handler:
+                if not handler._initialized:
+                    logger.error("MT5 initialization failed")
+                    time.sleep(60)  # Wait before retrying
                     continue
 
-        # Now fetch the latest data
-        for symbol in symbols:
-            await fetch_latest_data(account, symbol, candles_dir)
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {
+                        executor.submit(
+                            update_symbol_data, handler, data_manager, symbol, timeframe
+                        ): (symbol, timeframe)
+                        for symbol in symbols
+                        for timeframe in timeframes
+                    }
 
-    except Exception as err:
-        logger.error(f"Error in fetch_candles_data: {err}")
-    finally:
-        if api:
-            try:
-                await api.close()
-            except Exception as close_err:
-                logger.error(f"Error closing MetaApi connection: {close_err}")
+                    for future in as_completed(futures):
+                        symbol, timeframe = futures[future]
+                        try:
+                            success = future.result()
+                            if not success:
+                                logger.warning(f"Failed to update {symbol} {timeframe}")
+                        except Exception as e:
+                            logger.error(f"Task failed for {symbol} {timeframe}: {e}")
+
+            logger.info(f"Update cycle completed. Waiting {update_interval} seconds...")
+            time.sleep(update_interval)
+
+        except KeyboardInterrupt:
+            logger.info("Received shutdown signal. Stopping...")
+            break
+        except Exception as e:
+            logger.error(f"Error in update cycle: {e}")
+            time.sleep(60)  # Wait before retrying
 
 if __name__ == "__main__":
-    # When run directly, fetch historical data first
-    async def init_historical_data():
-        config = load_config()
-        api = await initialize_api(config)
+    symbols = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD']
+    timeframes = ['M15', 'H1', 'H4', 'D1']
+    
+    credentials = MT5Credentials(
+        login=213201143,
+        password="Y4&seP6U",
+        server="OctaFX-Demo"
+    )
 
-        if api:
-            try:
-                account = await api.metatrader_account_api.get_account(config['api_keys']['mt4_account_id'])
-
-                if account.state != 'DEPLOYED':
-                    await account.deploy()
-
-                if account.connection_status != 'CONNECTED':
-                    await account.wait_connected()
-
-                candles_dir = os.path.join('data', 'candles')
-                os.makedirs(candles_dir, exist_ok=True)
-
-                for symbol in config['assets']:
-                    await fetch_historical_data(account, symbol, candles_dir)
-
-            finally:
-                if api:
-                    await api.close()
-
-    try:
-        asyncio.run(init_historical_data())
-    except KeyboardInterrupt:
-        logger.info("Historical data fetch interrupted by user.")
-
+    # Start continuous updates
+    continuous_data_update(
+        symbols=symbols,
+        timeframes=timeframes,
+        credentials=credentials,
+        update_interval=60  # Update every minute
+    )
