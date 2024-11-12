@@ -14,6 +14,14 @@ logger = logging.getLogger(__name__)
 def create_lstm_model(input_shape: tuple, units: list = [128, 64, 32], dropout_rate: float = 0.2) -> tf.keras.Model:
     """
     Create LSTM model architecture.
+    
+    Args:
+        input_shape (tuple): Shape of input data (sequence_length, features)
+        units (list): List of units for each LSTM layer
+        dropout_rate (float): Dropout rate between layers
+        
+    Returns:
+        tf.keras.Model: Compiled LSTM model
     """
     model = Sequential()
 
@@ -35,9 +43,18 @@ def create_lstm_model(input_shape: tuple, units: list = [128, 64, 32], dropout_r
 
     return model
 
-def train_model(symbol: str, epochs: int = 100, batch_size: int = 32, validation_split: float = 0.2, early_stopping_patience: int = 20):
+def train_model(symbol: str, epochs: int = 100, batch_size: int = 32, validation_split: float = 0.2, 
+                early_stopping_patience: int = 20):
     """
     Train LSTM model and return the latest prediction.
+    
+    Args:
+        symbol (str): Trading symbol (e.g., 'EURUSD')
+        epochs (int): Number of training epochs
+        batch_size (int): Training batch size
+        validation_split (float): Fraction of data to use for validation
+        early_stopping_patience (int): Number of epochs to wait before early stopping
+        
     Returns:
         float: The latest prediction for the symbol
     """
@@ -95,6 +112,13 @@ def train_model(symbol: str, epochs: int = 100, batch_size: int = 32, validation
 def get_latest_prediction(symbol: str, model=None):
     """
     Get the latest prediction for a symbol.
+    
+    Args:
+        symbol (str): Trading symbol
+        model (tf.keras.Model, optional): Pre-loaded model
+        
+    Returns:
+        float: Predicted price value
     """
     try:
         # Load test data and scalers
@@ -122,6 +146,12 @@ def get_latest_prediction(symbol: str, model=None):
 def make_predictions(symbol: str):
     """
     Make predictions using the trained model.
+    
+    Args:
+        symbol (str): Trading symbol
+        
+    Returns:
+        float: Predicted price value
     """
     try:
         model_path = f'models/{symbol}_best_model.keras'
@@ -148,4 +178,3 @@ if __name__ == "__main__":
             logger.info(f"Latest prediction for {symbol}: {prediction}")
         else:
             logger.warning(f"Could not get prediction for {symbol}")
-
