@@ -89,4 +89,8 @@ system:
 news_config:
   retention_days: 7
   max_articles: 100
+<<<<<<< HEAD
   update_interval: 3600  # in seconds
+=======
+  update_interval: 3600  # in seconds
+>>>>>>> c6329656e079f94a17cf8202fc08a44039faf22a
