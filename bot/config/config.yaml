@@ -2,47 +2,65 @@
 api_keys:
   bing_api_key: "629329cba3d34ef79d3fd0bd3a1316f5"
   bing_custom_config_id: "6a5e9819-01a2-499f-9bce-c029385741ec"
-  #mt4_token: "eyJhbGciOiJSUzUxMiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiIwZWEzYjQwMGVhNmUyMDE1YmU0MjdjZDlkZjY2YTVlOSIsInBlcm1pc3Npb25zIjpbXSwiYWNjZXNzUnVsZXMiOlt7ImlkIjoidHJhZGluZy1hY2NvdW50LW1hbmFnZW1lbnQtYXBpIiwibWV0aG9kcyI6WyJ0cmFkaW5nLWFjY291bnQtbWFuYWdlbWVudC1hcGk6cmVzdDpwdWJsaWM6KjoqIl0sInJvbGVzIjpbInJlYWRlciJdLCJyZXNvdXJjZXMiOlsiYWNjb3VudDokVVNFUl9JRCQ6ZmQ2MjAxZDYtZGI1Mi00ZWFmLWEyNjAtN2Y3Mzg3ZWUxMmI3Il19LHsiaWQiOiJtZXRhYXBpLXJlc3QtYXBpIiwibWV0aG9kcyI6WyJtZXRhYXBpLWFwaTpyZXN0OnB1YmxpYzoqOioiXSwicm9sZXMiOlsicmVhZGVyIiwid3JpdGVyIl0sInJlc291cmNlcyI6WyJhY2NvdW50OiRVU0VSX0lEJDpmZDYyMDFkNi1kYjUyLTRlYWYtYTI2MC03ZjczODdlZTEyYjciXX0seyJpZCI6Im1ldGFhcGktcnBjLWFwaSIsIm1ldGhvZHMiOlsibWV0YWFwaS1hcGk6d3M6cHVibGljOio6KiJdLCJyb2xlcyI6WyJyZWFkZXIiLCJ3cml0ZXIiXSwicmVzb3VyY2VzIjpbImFjY291bnQ6JFVTRVJfSUQkOmZkNjIwMWQ2LWRiNTItNGVhZi1hMjYwLTdmNzM4N2VlMTJiNyJdfSx7ImlkIjoibWV0YWFwaS1yZWFsLXRpbWUtc3RyZWFtaW5nLWFwaSIsIm1ldGhvZHMiOlsibWV0YWFwaS1hcGk6d3M6cHVibGljOio6KiJdLCJyb2xlcyI6WyJyZWFkZXIiLCJ3cml0ZXIiXSwicmVzb3VyY2VzIjpbImFjY291bnQ6JFVTRVJfSUQkOmZkNjIwMWQ2LWRiNTItNGVhZi1hMjYwLTdmNzM4N2VlMTJiNyJdfSx7ImlkIjoibWV0YXN0YXRzLWFwaSIsIm1ldGhvZHMiOlsibWV0YXN0YXRzLWFwaTpyZXN0OnB1YmxpYzoqOioiXSwicm9sZXMiOlsicmVhZGVyIl0sInJlc291cmNlcyI6WyJhY2NvdW50OiRVU0VSX0lEJDpmZDYyMDFkNi1kYjUyLTRlYWYtYTI2MC03ZjczODdlZTEyYjciXX0seyJpZCI6InJpc2stbWFuYWdlbWVudC1hcGkiLCJtZXRob2RzIjpbInJpc2stbWFuYWdlbWVudC1hcGk6cmVzdDpwdWJsaWM6KjoqIl0sInJvbGVzIjpbInJlYWRlciJdLCJyZXNvdXJjZXMiOlsiYWNjb3VudDokVVNFUl9JRCQ6ZmQ2MjAxZDYtZGI1Mi00ZWFmLWEyNjAtN2Y3Mzg3ZWUxMmI3Il19LHsiaWQiOiJjb3B5ZmFjdG9yeS1hcGkiLCJtZXRob2RzIjpbImNvcHlmYWN0b3J5LWFwaTpyZXN0OnB1YmxpYzoqOioiXSwicm9sZXMiOlsicmVhZGVyIiwid3JpdGVyIl0sInJlc291cmNlcyI6WyIqOiRVU0VSX0lEJDoqIl19LHsiaWQiOiJtdC1tYW5hZ2VyLWFwaSIsIm1ldGhvZHMiOlsibXQtbWFuYWdlci1hcGk6cmVzdDpkZWFsaW5nOio6KiIsIm10LW1hbmFnZXItYXBpOnJlc3Q6cHVibGljOio6KiJdLCJyb2xlcyI6WyJyZWFkZXIiLCJ3cml0ZXIiXSwicmVzb3VyY2VzIjpbIio6JFVTRVJfSUQkOioiXX1dLCJ0b2tlbklkIjoiMjAyMTAyMTMiLCJpbXBlcnNvbmF0ZWQiOmZhbHNlLCJyZWFsVXNlcklkIjoiMGVhM2I0MDBlYTZlMjAxNWJlNDI3Y2Q5ZGY2NmE1ZTkiLCJpYXQiOjE3MzA4NDIyNjN9.lBaL8Rfwcgkj1rgjVgU2XF_1ibBIwUKiSq2USwevJOdWaQQs3TKwov5XJuNuE5ymiaRAjiNSB4cigcL8L1U3Q9wgA7C3IlBrkuzHJM8PUV9YK_FBUvNCCKZbGFE0yW7JaOhF1d9dNRQyNXMDX4YY-umyKKCqVjs_ym7MgcNK3VoGyhAV3_VADZzbaGL3HiN7y1tnUrsNI3BA5djup9W1xeL5sTGFveGGNRVXJsQRqu-FXC43Ynw8kunW5_ZpCfztep30lqpPsqpoucndp6aQkUPz-emcp6hlJimYnjecUadczHCoN-8mKVe6m163OgVuniv8gSAMKSnANvzoaBbCopG3N6MshYAsJLSjcUL3wqi65zKwlzhjPe5xuaMVMKlAIxJ8X_2REFnkztjNmZm9G_k2_lnyUlsNOER0YGyCaiRP0ZvMavNTsNQtayMtgzOcZjQpQqX7GZEwJAClV2fFxOGuprgM2SeXpa2kKTU9mt7OBXE42i9o9wZQt5oUmjcrxLOdUoV-CuWSPtfv7HDYfOQpteYhPCaTkrtnKOTyxgmguL-lP6_CQS9IRbB1astseu1DcAUzLw4AV9ptzNtBGvtQF_MwPCjQ_EjDhnmZ53Yo4JhAssnxnFoOv8EyBUVs-0UV3vKbEOI9JfFvNmsgns8TkSYhXQcupFX6ooxGti0"
-  #mt4_account_id: "fd6201d6-db52-4eaf-a260-7f7387ee12b7"
-  #domain: "agiliumtrade.agiliumtrade.ai"
-  
-  mt5_account_number: "213201143"
-  mt5_password: "Y4&seP6U"
-  mt5_server: "OctaFX-Demo"
 
+# MT5 Configuration
+mt5_credentials:
+  account_number: "213201143"
+  password: "Y4&seP6U"
+  server: "OctaFX-Demo"
+
+# Asset Configuration
 assets:
   - "EURUSD"
   - "GBPUSD"
   - "USDJPY"
   - "XAUUSD"
 
-resample_frequency: '1h'
-yf_period: '2y'
-yf_interval: '1h'
-
+# Data Collection Configuration
 data_config:
   timeframe: "1h"
   history_period: "2y"
   resample_frequency: "1h"
+  yf_period: "2y"
+  yf_interval: "1h"
 
+# Preprocessing Configuration
 preprocessing:
   lookback_period: 100
   train_test_split: 0.2
+  feature_columns:
+    - "Open"
+    - "High"
+    - "Low"
+    - "Close"
+    - "Volume"
+    - "positive"
+    - "negative"
+    - "neutral"
+    - "Returns"
+    - "RSI"
+    - "Momentum"
+    - "ROC"
 
+# Model Configuration
 model_params:
   confidence_threshold: 0.75
+  sequence_length: 60  # Unified sequence length
   lstm:
-    sequence_length: 60
     layers: [128, 64, 32]
     dropout: 0.2
     epochs: 100
     batch_size: 32
-  sequence_length: 50  # Moved inside model_params
+    optimizer:
+      type: "adam"
+      learning_rate: 0.001
 
+# Trading Strategies Configuration
 strategies:
   ma_crossover:
     short_window: 20
     long_window: 50
+    min_slope: 0.01
   rsi:
     period: 14
     overbought: 70
@@ -51,15 +69,24 @@ strategies:
     window: 20
     num_std: 2
 
+# Risk Management Configuration
 risk_management:
   take_profit: 0.02
   stop_loss: 0.01
   base_position_size: 0.1
   max_position_size: 1.0
-  
-analysis_interval: 1800
+  max_open_positions: 3
+  max_daily_loss: 0.05
 
+# System Configuration
+system:
+  analysis_interval: 1800  # in seconds
+  log_level: "INFO"
+  data_directory: "data"
+  log_directory: "logs"
+
+# News Configuration
 news_config:
   retention_days: 7
   max_articles: 100
-sequence_length: 50  # Add this line with an appropriate value
+  update_interval: 3600  # in seconds
