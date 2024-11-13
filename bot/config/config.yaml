@@ -77,6 +77,8 @@ risk_management:
   max_position_size: 1.0
   max_open_positions: 3
   max_daily_loss: 0.05
+  max_risk_per_trade: 0.01  # Added this line
+  max_leverage: 30  # Added this line
 
 # System Configuration
 system:
@@ -89,8 +91,4 @@ system:
 news_config:
   retention_days: 7
   max_articles: 100
-<<<<<<< HEAD
   update_interval: 3600  # in seconds
-=======
-  update_interval: 3600  # in seconds
->>>>>>> c6329656e079f94a17cf8202fc08a44039faf22a
