@@ -1,0 +1,27 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.9
+    commands:
+      - pip install --upgrade pip
+      - pip install -r bot/requirements.txt 
+
+phases:
+  build:
+    commands:
+      - echo "Starting news_scraper.py"
+      - python bot/news/news_scraper.py
+      - echo "Starting candles.py"
+      - python bot/candles.py
+      - echo "Starting yfinance.py"
+      - python bot/yfinance.py
+      - echo "Starting preprocess_data.py"
+      - python bot/preprocess_data.py
+      - echo "Starting lstm_model.py"
+      - python bot/models/lstm_model.py
+
+artifacts:
+  files:
+    - '**/*'
