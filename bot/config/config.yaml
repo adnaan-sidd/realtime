@@ -16,6 +16,13 @@ assets:
   - "USDJPY"
   - "XAUUSD"
 
+# Symbol Mapping
+symbol_mapping:
+  EURUSD: EURUSD
+  GBPUSD: GBPUSD
+  USDJPY: USDJPY
+  XAUUSD: GC=F
+
 # Data Collection Configuration
 data_config:
   timeframe: "1h"

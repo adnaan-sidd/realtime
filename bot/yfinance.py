@@ -160,5 +160,5 @@ if __name__ == "__main__":
     # Start continuous updates
     continuous_data_update(
         assets=assets,
-        update_interval=300  # Update every 5 minutes
+        update_interval=900  # Update every 5 minutes
     )
