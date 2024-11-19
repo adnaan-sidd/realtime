@@ -1,4 +1,5 @@
 # config.yaml
+
 api_keys:
   bing_api_key: "629329cba3d34ef79d3fd0bd3a1316f5"
   bing_custom_config_id: "6a5e9819-01a2-499f-9bce-c029385741ec"
@@ -87,6 +88,13 @@ risk_management:
   max_risk_per_trade: 0.01  # Added this line
   max_leverage: 30  # Added this line
 
+# Trading Preferences
+trading_preferences:
+  trade_duration_seconds: 3600  # Trade should remain open for 1 hour (3600 seconds)
+  timezone: 'UTC'  # Specify the timezone
+  start_hour: 0     # Trading starts at 00:00 UTC
+  end_hour: 23      # Trading ends at 23:00 UTC
+
 # System Configuration
 system:
   analysis_interval: 1800  # in seconds
@@ -99,3 +107,10 @@ news_config:
   retention_days: 7
   max_articles: 100
   update_interval: 3600  # in seconds
+
+email:
+  sender: 'adnansiddiquibz@gmail.com'
+  recipient: 'adnaansidd12@gmail.com'
+  smtp_server: 'smtp.gmail.com'
+  smtp_port: 587
+  password: '26122001As@'

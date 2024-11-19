@@ -9,6 +9,8 @@ import pickle
 import json
 import logging
 
+# Set up logging configuration
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def create_lstm_model(input_shape: tuple, units: list = [128, 64, 32], dropout_rate: float = 0.2) -> tf.keras.Model:
@@ -25,23 +27,36 @@ def create_lstm_model(input_shape: tuple, units: list = [128, 64, 32], dropout_r
     """
     model = Sequential()
 
-    # First LSTM layer
     model.add(Bidirectional(LSTM(units[0], return_sequences=True, input_shape=input_shape)))
     model.add(Dropout(dropout_rate))
 
-    # Middle LSTM layers
     for unit in units[1:-1]:
         model.add(Bidirectional(LSTM(unit, return_sequences=True)))
         model.add(Dropout(dropout_rate))
 
-    # Final LSTM layer
     model.add(Bidirectional(LSTM(units[-1])))
     model.add(Dropout(dropout_rate))
-
-    # Output layer
-    model.add(Dense(1))
-
+    model.add(Dense(1))  # Output layer
+    
     return model
+
+def load_data(symbol: str):
+    """
+    Load preprocessed data for the given symbol.
+    
+    Args:
+        symbol (str): Trading symbol
+        
+    Returns:
+        tuple: Input features (X) and target values (y)
+    """
+    try:
+        X = np.load(f'data/{symbol}_X.npy')
+        y = np.load(f'data/{symbol}_y.npy')
+        return X, y
+    except Exception as e:
+        logger.error(f"Error loading data for {symbol}: {e}")
+        raise
 
 def train_model(symbol: str, epochs: int = 100, batch_size: int = 32, validation_split: float = 0.2, 
                 early_stopping_patience: int = 20):
@@ -58,116 +73,96 @@ def train_model(symbol: str, epochs: int = 100, batch_size: int = 32, validation
     Returns:
         float: The latest prediction for the symbol
     """
-    try:
-        model_path = f'models/{symbol}_best_model.keras'
-        log_dir = f"logs/{symbol}"
-        tensorboard_callback = TensorBoard(log_dir=log_dir, histogram_freq=1)
+    model_path = f'models/{symbol}_best_model.keras'
+    log_dir = f"logs/{symbol}"
+    tensorboard_callback = TensorBoard(log_dir=log_dir, histogram_freq=1)
 
-        # Load or train the model
-        if os.path.exists(model_path):
-            logger.info(f"Model for {symbol} already trained. Loading the model from {model_path}.")
-            model = tf.keras.models.load_model(model_path)
-        else:
-            # Load preprocessed data
-            X = np.load(f'data/{symbol}_X.npy')
-            y = np.load(f'data/{symbol}_y.npy')
+    # Load or train the model
+    if os.path.exists(model_path):
+        logger.info(f"Model for {symbol} already trained. Loading from {model_path}.")
+        model = tf.keras.models.load_model(model_path)
+    else:
+        X, y = load_data(symbol)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
 
-            # Split data into training and testing sets
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+        model = create_lstm_model(input_shape=(X.shape[1], X.shape[2]))
+        model.compile(optimizer='adam', loss='mse', metrics=['mae'])
 
-            # Create and train model
-            model = create_lstm_model(input_shape=(X.shape[1], X.shape[2]))
-            model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+        callbacks = [
+            EarlyStopping(monitor='val_loss', patience=early_stopping_patience, restore_best_weights=True),
+            ModelCheckpoint(model_path, monitor='val_loss', save_best_only=True),
+            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6),
+            tensorboard_callback
+        ]
 
-            callbacks = [
-                EarlyStopping(monitor='val_loss', patience=early_stopping_patience, restore_best_weights=True),
-                ModelCheckpoint(model_path, monitor='val_loss', save_best_only=True),
-                ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6),
-                tensorboard_callback
-            ]
+        history = model.fit(
+            X_train, y_train,
+            epochs=epochs,
+            batch_size=batch_size,
+            validation_split=validation_split,
+            callbacks=callbacks,
+            verbose=1
+        )
 
-            history = model.fit(
-                X_train, y_train,
-                epochs=epochs,
-                batch_size=batch_size,
-                validation_split=validation_split,
-                callbacks=callbacks,
-                verbose=1
-            )
+        # Save training history
+        with open(f'models/{symbol}_training_history.json', 'w') as f:
+            json.dump({key: [float(val) for val in values] for key, values in history.history.items()}, f)
 
-            # Convert history.history to a serializable format
-            history_dict = {key: [float(val) for val in values] for key, values in history.history.items()}
+    return get_latest_prediction(symbol, model)
 
-            # Save training history
-            with open(f'models/{symbol}_training_history.json', 'w') as f:
-                json.dump(history_dict, f)
-
-        # Get latest prediction
-        return get_latest_prediction(symbol, model)
-
-    except Exception as e:
-        logger.error(f"Error in train_model for {symbol}: {e}")
-        return None
-
-def get_latest_prediction(symbol: str, model=None):
+def get_latest_prediction(symbol: str, model: tf.keras.Model) -> float:
     """
-    Get the latest prediction for a symbol.
+    Get the latest prediction for a symbol using the trained model.
     
     Args:
         symbol (str): Trading symbol
-        model (tf.keras.Model, optional): Pre-loaded model
+        model (tf.keras.Model): Pre-loaded model
         
     Returns:
         float: Predicted price value
     """
     try:
-        # Load test data and scalers
         X = np.load(f'data/{symbol}_X.npy')
         with open(f'data/{symbol}_scalers.pkl', 'rb') as f:
             scalers = pickle.load(f)
         close_scaler = scalers['Close']
 
-        # Get the most recent data point
         latest_data = X[-1:]  # Take the last sequence
-
-        # Make prediction
         prediction = model.predict(latest_data, verbose=0)
 
         # Inverse transform the prediction
         prediction_unscaled = close_scaler.inverse_transform(prediction)
-
-        # Return the single prediction value
         return float(prediction_unscaled[0][0])
 
     except Exception as e:
         logger.error(f"Error getting latest prediction for {symbol}: {e}")
         return None
 
-def make_predictions(symbol: str):
+def make_predictions(symbol: str) -> tuple:
     """
-    Make predictions using the trained model.
+    Make predictions using the trained model for the given trading symbol.
     
     Args:
         symbol (str): Trading symbol
         
     Returns:
-        float: Predicted price value
+        tuple: (predicted price value, duration in seconds)
     """
-    try:
-        model_path = f'models/{symbol}_best_model.keras'
-        if not os.path.exists(model_path):
-            logger.warning(f"No model found for {symbol}. Please train the model first.")
-            return None
+    model_path = f'models/{symbol}_best_model.keras'
 
-        model = tf.keras.models.load_model(model_path)
-        return get_latest_prediction(symbol, model)
+    if not os.path.exists(model_path):
+        logger.warning(f"No model found for {symbol}. Please train the model first.")
+        return None, None  # Return None for both values if there is no model
 
-    except Exception as e:
-        logger.error(f"Error in make_predictions for {symbol}: {e}")
-        return None
+    model = tf.keras.models.load_model(model_path)
+    prediction = get_latest_prediction(symbol, model)
+
+    # Assuming 'duration' is a constant, define it as per your requirements
+    duration = 3600  # Example duration of 1 hour; adjust if needed
+
+    return prediction, duration
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     os.makedirs('models', exist_ok=True)
 
     symbols = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"]
