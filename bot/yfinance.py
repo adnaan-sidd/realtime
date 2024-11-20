@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import List, Dict, Optional
+from typing import List, Optional
 
 # Configure logging
 logging.basicConfig(
@@ -16,27 +16,28 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AssetInfo:
-    """Store asset information and mapping"""
+    """Store asset information and mapping."""
     symbol: str
     name: str
     
     @classmethod
     def create(cls, symbol: str) -> 'AssetInfo':
-        """Create AssetInfo instance with proper name mapping"""
+        """Create AssetInfo instance with proper name mapping."""
         name = "gold" if symbol == "GC=F" else symbol.replace("=X", "")
         return cls(symbol=symbol, name=name)
 
 class DataManager:
+    """Handles data storage and updates for assets."""
     def __init__(self, base_dir: str = "data/yfinance"):
         self.base_dir = base_dir
         os.makedirs(self.base_dir, exist_ok=True)
         
     def get_file_path(self, asset_info: AssetInfo) -> str:
-        """Get the file path for an asset"""
+        """Get the file path for an asset."""
         return os.path.join(self.base_dir, f"{asset_info.name}_yf.csv")
     
     def get_last_date(self, asset_info: AssetInfo) -> Optional[datetime]:
-        """Get the last date in the existing file"""
+        """Get the last date in the existing file."""
         file_path = self.get_file_path(asset_info)
         if not os.path.exists(file_path):
             return None
@@ -51,7 +52,7 @@ class DataManager:
             return None
     
     def update_data(self, asset_info: AssetInfo, new_data: pd.DataFrame) -> bool:
-        """Update existing file with new data"""
+        """Update existing file with new data."""
         try:
             file_path = self.get_file_path(asset_info)
             if os.path.exists(file_path):
@@ -70,7 +71,7 @@ class DataManager:
             return False
 
 def check_missing_data(data: pd.DataFrame, asset_info: AssetInfo) -> bool:
-    """Check for missing data in the DataFrame"""
+    """Check for missing data in the DataFrame."""
     if data.isnull().values.any():
         logger.warning(f"Missing data detected in {asset_info.symbol}")
         return True
@@ -81,7 +82,7 @@ def fetch_asset_data(
     data_manager: DataManager,
     lookback_days: int = 730
 ) -> bool:
-    """Fetch and update data for a single asset"""
+    """Fetch and update data for a single asset."""
     try:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=lookback_days)
@@ -108,7 +109,7 @@ def update_all_assets(
     assets: List[str],
     max_workers: int = 5
 ) -> None:
-    """Update data for all assets once"""
+    """Update data for all assets once."""
     data_manager = DataManager()
     asset_infos = [AssetInfo.create(symbol) for symbol in assets]
 
@@ -128,6 +129,11 @@ def update_all_assets(
                     logger.warning(f"Failed to update {asset_info.symbol}")
             except Exception as e:
                 logger.error(f"Task failed for {asset_info.symbol}: {e}")
+
+def continuous_data_update(assets: List[str], lookback_days: int = 730) -> None:
+    """Continuously update historical price data for the specified assets."""
+    logger.info("Starting continuous data update...")
+    update_all_assets(assets, max_workers=5)
 
 if __name__ == "__main__":
     assets = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "GC=F"]
