@@ -26,7 +26,11 @@ symbol_mapping:
 
 # Data Collection Configuration
 data_config:
-  timeframe: "1h"
+  timeframe: 
+    - "M15"
+    - "H1"
+    - "H4"
+    - "D1"
   history_period: "2y"
   resample_frequency: "1h"
   yf_period: "2y"

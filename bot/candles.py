@@ -1,12 +1,13 @@
 import os
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 import MetaTrader5 as mt5
 import pandas as pd
 from datetime import datetime, timedelta
 from dataclasses import dataclass
-import time
+import yaml
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 # Configure logging
 logging.basicConfig(
@@ -138,6 +139,7 @@ class DataManager:
             logger.error(f"Error updating data for {symbol} {timeframe}: {e}")
             return False
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(10))
 def fetch_data_range(
     handler: MT5Handler,
     symbol: str,
@@ -145,7 +147,7 @@ def fetch_data_range(
     start_date: datetime,
     end_date: datetime
 ) -> Optional[pd.DataFrame]:
-    """Fetch data for a specific date range"""
+    """Fetch data for a specific date range with retry mechanism"""
     try:
         mt5_timeframe = handler.get_mt5_timeframe(timeframe)
         if mt5_timeframe is None:
@@ -178,17 +180,9 @@ def update_symbol_data(
 ) -> bool:
     """Update data for a single symbol and timeframe"""
     try:
-        last_candle_time = data_manager.get_last_candle_time(symbol, timeframe)
         end_date = datetime.now()
-
-        if last_candle_time is None:
-            # No existing data, fetch historical data
-            start_date = end_date - timedelta(days=lookback_days)
-            logger.info(f"Fetching historical data for {symbol} {timeframe}")
-        else:
-            # Fetch only new data since last candle
-            start_date = last_candle_time
-            logger.info(f"Fetching new data for {symbol} {timeframe} since {start_date}")
+        start_date = end_date - timedelta(days=lookback_days)
+        logger.info(f"Fetching data for {symbol} {timeframe} from {start_date} to {end_date}")
 
         df = fetch_data_range(handler, symbol, timeframe, start_date, end_date)
         if df is None or len(df) == 0:
@@ -201,66 +195,55 @@ def update_symbol_data(
         logger.error(f"Error updating {symbol} {timeframe}: {e}")
         return False
 
-def continuous_data_update(
+def update_all_symbols(
     symbols: List[str],
     timeframes: List[str],
     credentials: MT5Credentials,
-    update_interval: int = 60,  # seconds
     max_workers: int = 5
 ) -> None:
-    """Continuously update data for all symbols and timeframes"""
+    """Update data for all symbols and timeframes once"""
     data_manager = DataManager()
 
-    while True:
-        try:
-            with MT5Handler(credentials) as handler:
-                if not handler._initialized:
-                    logger.error("MT5 initialization failed")
-                    time.sleep(60)  # Wait before retrying
-                    continue
+    with MT5Handler(credentials) as handler:
+        if not handler._initialized:
+            logger.error("MT5 initialization failed")
+            return
 
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    futures = {
-                        executor.submit(
-                            update_symbol_data, handler, data_manager, symbol, timeframe
-                        ): (symbol, timeframe)
-                        for symbol in symbols
-                        for timeframe in timeframes
-                    }
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    update_symbol_data, handler, data_manager, symbol, timeframe
+                ): (symbol, timeframe)
+                for symbol in symbols
+                for timeframe in timeframes
+            }
 
-                    for future in as_completed(futures):
-                        symbol, timeframe = futures[future]
-                        try:
-                            success = future.result()
-                            if not success:
-                                logger.warning(f"Failed to update {symbol} {timeframe}")
-                        except Exception as e:
-                            logger.error(f"Task failed for {symbol} {timeframe}: {e}")
-
-            logger.info(f"Update cycle completed. Waiting {update_interval} seconds...")
-            time.sleep(update_interval)
-
-        except KeyboardInterrupt:
-            logger.info("Received shutdown signal. Stopping...")
-            break
-        except Exception as e:
-            logger.error(f"Error in update cycle: {e}")
-            time.sleep(60)  # Wait before retrying
+            for future in as_completed(futures):
+                symbol, timeframe = futures[future]
+                try:
+                    success = future.result()
+                    if not success:
+                        logger.warning(f"Failed to update {symbol} {timeframe}")
+                except Exception as e:
+                    logger.error(f"Task failed for {symbol} {timeframe}: {e}")
 
 if __name__ == "__main__":
-    symbols = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD']
-    timeframes = ['M15', 'H1', 'H4', 'D1']
+    # Load configuration from file
+    with open('config/config.yaml', 'r') as file:
+        config = yaml.safe_load(file)
+
+    symbols = config['assets']
+    timeframes = config['data_config']['timeframe']
     
     credentials = MT5Credentials(
-        login=213201143,
-        password="Y4&seP6U",
-        server="OctaFX-Demo"
+        login=int(config['mt5_credentials']['account_number']),
+        password=config['mt5_credentials']['password'],
+        server=config['mt5_credentials']['server']
     )
 
-    # Start continuous updates
-    continuous_data_update(
+    # Update all symbols and timeframes once
+    update_all_symbols(
         symbols=symbols,
-        timeframes=timeframes,
-        credentials=credentials,
-        update_interval=60  # Update every minute
+        timeframes=timeframes,  # Ensure timeframes is a list
+        credentials=credentials
     )

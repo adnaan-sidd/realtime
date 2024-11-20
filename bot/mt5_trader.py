@@ -149,29 +149,24 @@ class MT5Trader:
             self.logger.error(f"Symbol {symbol} not found or not visible.")
             return False
 
-        # Get the current tick information
         tick_info = mt5.symbol_info_tick(symbol)
         if tick_info is None:
             self.logger.error(f"Failed to get tick information for {symbol}.")
             return False
 
-        # Extract the time from tick info
         server_time = tick_info.time
         current_time = datetime.fromtimestamp(server_time)
 
-        # Check trading hours for the market
         timezone_str = self.config['trading_preferences'].get('timezone', 'UTC')
         start_hour = self.config['trading_preferences'].get('start_hour', 0)
         end_hour = self.config['trading_preferences'].get('end_hour', 23)
 
-        # Convert timezone string to datetime timezone
         try:
             timezone = pytz.timezone(timezone_str)
         except pytz.UnknownTimeZoneError:
             self.logger.error(f"Unknown timezone: {timezone_str}. Defaulting to UTC.")
             timezone = pytz.utc
 
-        # Adjust for timezone
         current_time = current_time.astimezone(timezone)
 
         return dtime(start_hour, 0) <= current_time.time() <= dtime(end_hour, 0)
@@ -182,7 +177,6 @@ class MT5Trader:
             self.logger.error(f"Invalid trade action: {action}")
             return False
 
-        # Check if the market is open before executing trade
         if not self.is_market_open(symbol):
             self.logger.error(f"Market closed for symbol {symbol}. Cannot execute trade.")
             return False
@@ -229,7 +223,6 @@ class MT5Trader:
             'type_time': mt5.ORDER_TIME_GTC,
             'type_filling': mt5.ORDER_FILLING_FOK,
         }
-
         result = mt5.order_send(request)
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             self.logger.error(f"Trade execution failed: {result.retcode} - {result.comment}")
@@ -237,10 +230,9 @@ class MT5Trader:
             return False
 
         self.logger.info(f"Trade executed successfully: {action} {position_size} {symbol} at {price} SL: {stop_loss}, TP: {take_profit}")
-        
-        # Wait for the specified duration before closing the trade in another thread
+
         threading.Thread(target=self._wait_and_close_trade, args=(symbol, order_type, position_size, duration)).start()
-        
+
         return True
 
     def _wait_and_close_trade(self, symbol: str, order_type: int, position_size: float, duration: int) -> None:
@@ -275,7 +267,10 @@ class MT5Trader:
         for symbol in self.config['assets']:
             prediction, duration = make_predictions(symbol)
             if prediction is not None:
-                action = 'buy' if prediction > 0 else 'sell'
+                if prediction[0] > 0:
+                    action = 'buy'
+                else:
+                    action = 'sell'
                 self.execute_trade(symbol, action, duration)
             else:
                 self.logger.warning(f"No prediction available for {symbol}")

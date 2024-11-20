@@ -166,7 +166,7 @@ class FeatureEngine:
             df[f'SMA_{short_window}'] = df['Close'].rolling(window=short_window).mean()
             df[f'SMA_{long_window}'] = df['Close'].rolling(window=long_window).mean()
 
-            # RSI
+                        # RSI
             rsi_period = self.config.config['strategies']['rsi']['period']
             delta = df['Close'].diff()
             gain = delta.where(delta > 0, 0).rolling(window=rsi_period).mean()
@@ -212,25 +212,31 @@ class SequencePreparation:
 
             # Scale features
             scalers = {}
-            scaled_data = pd.DataFrame()
+            scaled_data = pd.DataFrame(index=data.index)
             for column in feature_columns:
                 scaler = MinMaxScaler()
-                scaled_data[column] = scaler.fit_transform(data[column].values.reshape(-1, 1)).flatten()
+                scaled_data[column] = scaler.fit_transform(data[[column]])
                 scalers[column] = scaler
 
-            # Create sequences
+            # Create sequences using numpy for efficiency
             X, y = [], []
-            for i in range(len(scaled_data) - self.sequence_length):
-                X.append(scaled_data[feature_columns].iloc[i:(i + self.sequence_length)].values)
-                y.append(scaled_data['Close'].iloc[i + self.sequence_length])
+            data_values = scaled_data[feature_columns].values
+            close_values = scaled_data['Close'].values
 
-            logger.info(f"Sequences prepared. X shape: {np.array(X).shape}, y shape: {np.array(y).shape}")
-            return np.array(X), np.array(y), scalers
+            for i in range(len(data_values) - self.sequence_length):
+                X.append(data_values[i:(i + self.sequence_length)])
+                y.append(close_values[i + self.sequence_length])
+
+            X = np.array(X)
+            y = np.array(y)
+
+            logger.info(f"Sequences prepared. X shape: {X.shape}, y shape: {y.shape}")
+            return X, y, scalers
 
         except Exception as e:
             logger.error(f"Error preparing sequences: {str(e)}")
             raise
-
+        
 class PreprocessingPipeline:
     """Main preprocessing pipeline orchestrator."""
     def __init__(self, config: Config):

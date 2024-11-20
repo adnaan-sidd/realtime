@@ -11,7 +11,7 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('news_scraper.log')
+        logging.FileHandler('logs/news_scraper.log')
     ]
 )
 logger = logging.getLogger(__name__)
@@ -26,10 +26,14 @@ class NewsScraperEnhanced:
         self.sentiment_file = 'data/sentiment.json'
         self.influencers = self._define_influencers()
         self.last_fetch_times = {}
+        self.fetched_urls = set()
         
         # Create necessary directories
         os.makedirs('data', exist_ok=True)
         os.makedirs('logs', exist_ok=True)
+
+        # Load previously fetched URLs
+        self._load_fetched_urls()
 
     def _load_config(self, config_path: str) -> dict:
         """Load configuration with error handling and validation"""
@@ -43,8 +47,11 @@ class NewsScraperEnhanced:
                     raise ValueError(f"Missing required configuration field: {field}")
             
             return config
-        except Exception as e:
+        except (yaml.YAMLError, ValueError) as e:
             logger.error(f"Error loading config: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error loading config: {e}")
             raise
 
     def _define_influencers(self) -> dict:
@@ -55,6 +62,17 @@ class NewsScraperEnhanced:
             "USDJPY": ["BOJ", "US-Japan Relations", "USD/JPY", "Bank of Japan", "Japanese economy", "Yen Dollar"],
             "XAUUSD": ["Gold prices", "Gold demand", "XAU/USD", "Gold market", "Gold trading"],
         }
+
+    def _load_fetched_urls(self):
+        """Load previously fetched URLs to avoid duplicates"""
+        if os.path.exists(self.sentiment_file):
+            try:
+                with open(self.sentiment_file, 'r') as f:
+                    data = json.load(f)
+                    self.fetched_urls = {entry['url'] for entry in data}
+                logger.info("Loaded previously fetched URLs")
+            except Exception as e:
+                logger.error(f"Error loading fetched URLs: {e}")
 
     def _fetch_asset_news(self, query: str) -> list:
         """Fetch news with improved error handling"""
@@ -68,8 +86,6 @@ class NewsScraperEnhanced:
             "freshness": "Day"
         }
         
-        all_results = []
-        
         try:
             response = requests.get(self.api_url, headers=headers, params=params, timeout=30)
             response.raise_for_status()
@@ -82,15 +98,19 @@ class NewsScraperEnhanced:
                     'url': item['url'],
                     'timestamp': datetime.now(timezone.utc).isoformat(),
                     'source': item.get('publisher', [{'name': 'Unknown'}])[0]['name']
-                } for item in data['webPages']['value']]
-                all_results.extend(results)
-                logger.info(f"Successfully fetched {len(results)} articles for query: {query}")
+                } for item in data['webPages']['value'] if item['url'] not in self.fetched_urls]
+                
+                logger.info(f"Successfully fetched {len(results)} new articles for query: {query}")
+                return results
             else:
                 logger.warning(f"No results found for query: {query}")
+                return []
+        except requests.RequestException as e:
+            logger.error(f"Request error in _fetch_asset_news: {e}")
+            return []
         except Exception as e:
-            logger.error(f"Error in _fetch_asset_news: {e}")
-        
-        return all_results
+            logger.error(f"Unexpected error in _fetch_asset_news: {e}")
+            return []
 
     def analyze_sentiment(self, text: str) -> dict:
         """Enhanced sentiment analysis with error handling"""
@@ -111,7 +131,7 @@ class NewsScraperEnhanced:
                 news_query = f"{asset} {topic}"
                 news_articles = self._fetch_asset_news(news_query)
                 if news_articles:
-                    all_news[asset] = news_articles
+                    all_news.setdefault(asset, []).extend(news_articles)
                 self.last_fetch_times[asset] = datetime.now(timezone.utc)
 
         self.process_and_save_news(all_news)
@@ -133,8 +153,8 @@ class NewsScraperEnhanced:
                         'sentiment_scores': sentiment_scores,
                         'timestamp': article['timestamp']
                     })
+                    self.fetched_urls.add(article['url'])
             
-            # Save directly to file without using aiofiles
             self._update_sentiment_file(sentiment_data)
         except Exception as e:
             logger.error(f"Error processing news data: {e}")
@@ -164,7 +184,7 @@ class NewsScraperEnhanced:
 
             # Save to file
             with open(self.sentiment_file, 'w') as f:
-                json.dump(combined_data, indent=4, fp=f)
+                json.dump(combined_data, f, indent=4)
 
             logger.info(f"Updated sentiment file with {len(new_data)} new entries")
             self.convert_json_to_csv()

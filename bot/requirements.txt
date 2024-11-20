@@ -21,3 +21,4 @@ tf-keras
 aioschedule
 backoff
 yahoo_fin
+tenacity

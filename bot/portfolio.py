@@ -59,4 +59,3 @@ if __name__ == "__main__":
 
     quantity = portfolio_manager.calculate_quantity(config['risk_per_trade'], config['stop_loss_pips'])
     logging.info(f"Calculated trade quantity: {quantity}")
-

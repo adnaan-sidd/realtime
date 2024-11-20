@@ -6,7 +6,6 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import List, Dict, Optional
-import time
 
 # Configure logging
 logging.basicConfig(
@@ -85,19 +84,8 @@ def fetch_asset_data(
     """Fetch and update data for a single asset"""
     try:
         end_date = datetime.now()
-        last_date = data_manager.get_last_date(asset_info)
-        
-        if last_date is None:
-            # No existing data, fetch historical data
-            start_date = end_date - timedelta(days=lookback_days)
-            logger.info(f"Fetching historical data for {asset_info.symbol}")
-        else:
-            # Fetch only new data since last date
-            start_date = last_date
-            if start_date.date() >= end_date.date():
-                logger.info(f"No update needed for {asset_info.symbol}, already up-to-date")
-                return True
-            logger.info(f"Fetching new data for {asset_info.symbol} since {start_date}")
+        start_date = end_date - timedelta(days=lookback_days)
+        logger.info(f"Fetching data for {asset_info.symbol} from {start_date} to {end_date}")
         
         data = si.get_data(
             asset_info.symbol,
@@ -116,49 +104,35 @@ def fetch_asset_data(
         logger.error(f"Error fetching data for {asset_info.symbol}: {e}")
         return False
 
-def continuous_data_update(
+def update_all_assets(
     assets: List[str],
-    update_interval: int = 300,  # 5 minutes default
     max_workers: int = 5
 ) -> None:
-    """Continuously update data for all assets"""
+    """Update data for all assets once"""
     data_manager = DataManager()
     asset_infos = [AssetInfo.create(symbol) for symbol in assets]
-    
-    while True:
-        try:
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = {
-                    executor.submit(
-                        fetch_asset_data, asset_info, data_manager
-                    ): asset_info
-                    for asset_info in asset_infos
-                }
-                
-                for future in as_completed(futures):
-                    asset_info = futures[future]
-                    try:
-                        success = future.result()
-                        if not success:
-                            logger.warning(f"Failed to update {asset_info.symbol}")
-                    except Exception as e:
-                        logger.error(f"Task failed for {asset_info.symbol}: {e}")
-            
-            logger.info(f"Update cycle completed. Waiting {update_interval} seconds...")
-            time.sleep(update_interval)
-            
-        except KeyboardInterrupt:
-            logger.info("Received shutdown signal. Stopping...")
-            break
-        except Exception as e:
-            logger.error(f"Error in update cycle: {e}")
-            time.sleep(60)  # Wait before retrying
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                fetch_asset_data, asset_info, data_manager
+            ): asset_info
+            for asset_info in asset_infos
+        }
+        
+        for future in as_completed(futures):
+            asset_info = futures[future]
+            try:
+                success = future.result()
+                if not success:
+                    logger.warning(f"Failed to update {asset_info.symbol}")
+            except Exception as e:
+                logger.error(f"Task failed for {asset_info.symbol}: {e}")
 
 if __name__ == "__main__":
     assets = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "GC=F"]
     
-    # Start continuous updates
-    continuous_data_update(
-        assets=assets,
-        update_interval=900  # Update every 5 minutes
+    # Update all assets once
+    update_all_assets(
+        assets=assets
     )
