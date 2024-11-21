@@ -92,14 +92,15 @@ Modify the `config.yaml` file to adjust the following settings:
 ```plaintext
 ├── bot/
 │   ├── data/                    # Contains historical and real-time data files
-│   ├── models/                  # Directory for trained models
+│   ├── models/lstm_model.py                 # Directory for trained models
 │   ├── config/config.yaml       # Configuration file for API keys and parameters
 │   ├── logs/                    # Directory for log files
 │   ├── preprocess_data.py       # Script to preprocess data for model training
-│   ├── lstm_model.py            # Defines the LSTM model and training function
+│   ├── candles.py            # Defines the candles model and training function
+|   |-- yfinance.py
 │   ├── main.py                  # Main script to start the bot
-│   ├── news_scraper.py          # Fetches news data and performs sentiment analysis
-│   ├── metaapi_trader.py        # Manages MT5 account connections and trade execution
+│   ├── news/news_scraper.py          # Fetches news data and performs sentiment analysis
+│   ├── mt5_trader.py        # Manages MT5 account connections and trade execution
 └── requirements.txt             # List of Python dependencies
 ```
 
