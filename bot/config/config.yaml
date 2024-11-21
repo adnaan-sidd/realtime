@@ -69,6 +69,10 @@ model_params:
 
 # Trading Strategies Configuration
 strategies:
+  momentum:
+    period: 4  # Momentum period definition
+  roc:
+    period: 12  # ROC period definition
   ma_crossover:
     short_window: 20
     long_window: 50

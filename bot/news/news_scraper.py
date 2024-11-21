@@ -1,25 +1,24 @@
 import os
 import yaml
-import json
 import requests
 import logging
-import pandas as pd
-from datetime import datetime, timedelta, timezone
+import json
+import pandas as pd  # <-- Add this import
 from transformers import pipeline
+from datetime import datetime, timedelta, timezone
 
+# Initialize logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('logs/news_scraper.log')
-    ]
+    handlers=[logging.StreamHandler(), logging.FileHandler('logs/news_scraper.log')]
 )
 logger = logging.getLogger(__name__)
 
 class NewsScraperEnhanced:
     def __init__(self, config_path: str = "config/config.yaml"):
-        self.config = self._load_config(config_path)
+        # Load configuration via the fixed load_config method
+        self.config = self.load_config(config_path)
         self.subscription_key = self.config['api_keys']['bing_api_key']
         self.custom_config_id = self.config['api_keys']['bing_custom_config_id']
         self.assets = self.config['assets']
@@ -39,7 +38,7 @@ class NewsScraperEnhanced:
         # Initialize sentiment analysis model
         self.sentiment_analyzer = pipeline("sentiment-analysis")
 
-    def _load_config(self, config_path: str) -> dict:
+    def load_config(self, config_path: str) -> dict:
         """Load configuration with error handling and validation"""
         try:
             with open(config_path, 'r') as file:
@@ -119,7 +118,13 @@ class NewsScraperEnhanced:
     def analyze_sentiment(self, text: str) -> dict:
         """Enhanced sentiment analysis with Hugging Face model"""
         sentiment = self.sentiment_analyzer(text)[0]
-        return sentiment
+        
+        # Return sentiment in the required dictionary format
+        sentiment_data = {
+            'label': sentiment['label'],  # 'POSITIVE', 'NEGATIVE', 'NEUTRAL'
+            'score': sentiment['score']   # Sentiment score, e.g., 0.9876936078071594
+        }
+        return sentiment_data
 
     def fetch_news(self):
         """Fetch news with error handling"""
