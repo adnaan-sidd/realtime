@@ -5,6 +5,7 @@ import requests
 import logging
 import pandas as pd
 from datetime import datetime, timedelta, timezone
+from transformers import pipeline
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,6 +35,9 @@ class NewsScraperEnhanced:
 
         # Load previously fetched URLs
         self._load_fetched_urls()
+
+        # Initialize sentiment analysis model
+        self.sentiment_analyzer = pipeline("sentiment-analysis")
 
     def _load_config(self, config_path: str) -> dict:
         """Load configuration with error handling and validation"""
@@ -113,15 +117,9 @@ class NewsScraperEnhanced:
             return []
 
     def analyze_sentiment(self, text: str) -> dict:
-        """Enhanced sentiment analysis with error handling"""
-        # Mocked sentiment analysis since the sentiment model is removed
-        # Replace with actual sentiment analysis logic if needed
-        return {
-            'positive': 0.5,
-            'negative': 0.5,
-            'neutral': 0.0,
-            'compound': 0.0
-        }
+        """Enhanced sentiment analysis with Hugging Face model"""
+        sentiment = self.sentiment_analyzer(text)[0]
+        return sentiment
 
     def fetch_news(self):
         """Fetch news with error handling"""

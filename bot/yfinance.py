@@ -73,12 +73,30 @@ class DataManager:
             logger.error(f"Error updating data for {asset_info.symbol}: {e}")
             return False
 
-def check_missing_data(data: pd.DataFrame, asset_info: AssetInfo) -> bool:
-    """Check for missing data in the DataFrame."""
-    if data.isnull().values.any():
-        logger.warning(f"Missing data detected in {asset_info.symbol}")
-        return True
-    return False
+def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """Add technical indicators like RSI, MA, and Bollinger Bands."""
+    # RSI Calculation
+    delta = df['close'].diff()  # Diff of closing prices
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    
+    # Calculate average gain and loss over the 14-day period
+    avg_gain = gain.rolling(window=14).mean()
+    avg_loss = loss.rolling(window=14).mean()
+
+    # Calculate RSI
+    rs = avg_gain / avg_loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+
+    # Moving Averages
+    df['SMA_50'] = df['close'].rolling(window=50).mean()
+    df['SMA_200'] = df['close'].rolling(window=200).mean()
+
+    # Bollinger Bands
+    df['Bollinger_Upper'] = df['SMA_50'] + (df['close'].rolling(window=50).std() * 2)
+    df['Bollinger_Lower'] = df['SMA_50'] - (df['close'].rolling(window=50).std() * 2)
+
+    return df
 
 def fetch_asset_data(
     asset_info: AssetInfo,
@@ -99,7 +117,10 @@ def fetch_asset_data(
             return False  # Indicate failure to fetch data
             
         data = data.reset_index().set_index('date')
-        check_missing_data(data, asset_info)
+        
+        # Add technical indicators
+        data = add_technical_indicators(data)
+        
         return data_manager.update_data(asset_info, data)
         
     except Exception as e:
