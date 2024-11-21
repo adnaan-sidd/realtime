@@ -84,14 +84,24 @@ class DataManager:
     def __init__(self, base_dir: str = 'data'):
         self.base_dir = base_dir
         self.candles_dir = os.path.join(base_dir, 'candles')
-        os.makedirs(self.candles_dir, exist_ok=True)
+
+        # Ensure the `data` and `candles` directories exist
+        if not os.path.exists(self.base_dir):
+            logger.info(f"Creating 'data' directory at {self.base_dir}")
+            os.makedirs(self.base_dir)
+
+        if not os.path.exists(self.candles_dir):
+            logger.info(f"Creating 'candles' directory at {self.candles_dir}")
+            os.makedirs(self.candles_dir)
+
+        logger.info(f"Data will be stored at: {self.candles_dir}")
 
     def get_file_path(self, symbol: str, timeframe: str) -> str:
-        """Get the file path for a specific symbol and timeframe."""
+        """Generate the file path for a specific symbol and timeframe."""
         return os.path.join(self.candles_dir, f"{symbol}_{timeframe}.csv")
 
     def get_last_candle_time(self, symbol: str, timeframe: str) -> Optional[datetime]:
-        """Retrieve the timestamp of the last candle from the file."""
+        """Retrieve the timestamp of the last candle in the file."""
         file_path = self.get_file_path(symbol, timeframe)
         if not os.path.exists(file_path):
             return None
@@ -129,6 +139,31 @@ class DataManager:
             logger.error(f"Error updating data for {symbol} {timeframe}: {e}")
             return False
 
+def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """Add technical indicators like RSI, MA, and Bollinger Bands."""
+    # RSI Calculation
+    delta = df['close'].diff()  # Diff of closing prices
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    
+    # Calculate average gain and loss over the 14-day period
+    avg_gain = gain.rolling(window=14).mean()
+    avg_loss = loss.rolling(window=14).mean()
+
+    # Calculate RSI
+    rs = avg_gain / avg_loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+
+    # Moving Averages
+    df['SMA_50'] = df['close'].rolling(window=50).mean()
+    df['SMA_200'] = df['close'].rolling(window=200).mean()
+
+    # Bollinger Bands
+    df['Bollinger_Upper'] = df['SMA_50'] + (df['close'].rolling(window=50).std() * 2)
+    df['Bollinger_Lower'] = df['SMA_50'] - (df['close'].rolling(window=50).std() * 2)
+
+    return df
+
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(10))
 def fetch_data_range(
     handler: MT5Handler,
@@ -151,6 +186,10 @@ def fetch_data_range(
 
         df = pd.DataFrame(rates)
         df['time'] = pd.to_datetime(df['time'], unit='s')
+        
+        # Add technical indicators
+        df = add_technical_indicators(df)
+
         return df
     except Exception as e:
         logger.error(f"Error fetching data for {symbol} {timeframe}: {e}")
