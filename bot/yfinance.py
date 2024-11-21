@@ -1,5 +1,8 @@
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
 import logging
-from yahoo_fin import stock_info as si
+from yahooquery import Ticker
 import os
 from datetime import datetime, timedelta
 import pandas as pd
@@ -88,16 +91,14 @@ def fetch_asset_data(
         start_date = end_date - timedelta(days=lookback_days)
         logger.info(f"Fetching data for {asset_info.symbol} from {start_date} to {end_date}")
         
-        data = si.get_data(
-            asset_info.symbol,
-            start_date=start_date.strftime("%m/%d/%Y"),
-            end_date=end_date.strftime("%m/%d/%Y")
-        )
+        ticker = Ticker(asset_info.symbol)
+        data = ticker.history(start=start_date.strftime("%Y-%m-%d"), end=end_date.strftime("%Y-%m-%d"))
         
         if data.empty:
             logger.warning(f"No data fetched for {asset_info.symbol}")
-            return True  # Not necessarily an error
+            return False  # Indicate failure to fetch data
             
+        data = data.reset_index().set_index('date')
         check_missing_data(data, asset_info)
         return data_manager.update_data(asset_info, data)
         

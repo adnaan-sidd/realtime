@@ -1,49 +1,33 @@
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
 import yaml
 import logging
 import asyncio
 import os
 from datetime import datetime
 from news.news_scraper import NewsScraperEnhanced
-from candles import continuous_data_update  # Fixed import path
+from candles import continuous_data_update as candles_update
 from yfinance import continuous_data_update as yfinance_update
 from preprocess_data import main as preprocess_main
 from models.lstm_model import train_model
 from backtest import Backtest
 from mt5_trader import MT5Trader
 
+
 class ConfigurationError(Exception):
     """Custom exception for configuration-related errors."""
     pass
 
-class MT5Credentials:
-    """Class to hold MT5 credentials with proper attribute access."""
-    def __init__(self, login: int, password: str, server: str):
-        self.login = login
-        self.password = password
-        self.server = server
-
-def async_error_handler(func):
-    """Decorator for handling errors in asynchronous functions."""
-    async def wrapper(*args, **kwargs):
-        operation_name = func.__name__
-        try:
-            await func(*args, **kwargs)
-            args[0].logger.info(f"{operation_name} completed successfully.")
-        except Exception as e:
-            args[0].logger.error(f"Error in {operation_name}: {e}")
-            await asyncio.sleep(60)  # Wait before retry
-    return wrapper
 
 class AsyncTradingBot:
-    """Asynchronous trading bot class that orchestrates all operations with different update frequencies."""
+    """Asynchronous trading bot class that orchestrates all operations."""
 
     def __init__(self, config_path: str):
         """Initialize the trading bot with configuration."""
         self.config_path = config_path
         self.config = None
         self.logger = self._setup_logging()
-        self.running = False
-        self.tasks = []
 
     @staticmethod
     def _setup_logging() -> logging.Logger:
@@ -62,128 +46,122 @@ class AsyncTradingBot:
     def load_config(self) -> None:
         """Load and validate YAML configuration."""
         if not os.path.exists(self.config_path):
-            with open(self.config_path, 'w') as file:
-                yaml.dump({'mt5_credentials': {}, 'assets': [], 'symbol_mapping': {}, 'api_keys': {}}, file)
-            self.logger.warning(f"Default config created. Please update it at {self.config_path}")
-            raise ConfigurationError(f"Default config created. Update it at {self.config_path}")
+            self.logger.error(f"Configuration file not found: {self.config_path}")
+            raise ConfigurationError("Configuration file not found.")
 
         try:
             with open(self.config_path, 'r') as file:
                 self.config = yaml.safe_load(file)
-            self.logger.debug(f"Loaded configuration: {self.config}")
-            self._validate_config()
+            if not self.config.get('assets'):
+                raise ConfigurationError("Assets not specified in the configuration file.")
+            self.logger.info("Configuration loaded successfully.")
         except yaml.YAMLError as e:
-            raise ConfigurationError(f"Error parsing YAML configuration: {e}")
+            self.logger.error(f"Error parsing YAML configuration: {e}")
+            raise ConfigurationError("Error parsing YAML configuration.")
 
-    def _validate_config(self) -> None:
-        """Validate configuration parameters."""
-        required_fields = ['mt5_credentials', 'assets', 'symbol_mapping', 'api_keys']
-        mt5_required_fields = ['account_number', 'password', 'server']
-
-        missing_fields = [field for field in required_fields if field not in self.config]
-        if missing_fields:
-            self.logger.error(f"Missing required fields in config: {missing_fields}")
-            raise ConfigurationError(f"Missing required fields in config: {missing_fields}")
-
-        missing_mt5_fields = [field for field in mt5_required_fields if field not in self.config['mt5_credentials']]
-        if missing_mt5_fields:
-            self.logger.error(f"Missing required MT5 credentials: {missing_mt5_fields}")
-            raise ConfigurationError(f"Missing required MT5 credentials: {missing_mt5_fields}")
-
-        if not isinstance(self.config['assets'], list) or not self.config['assets']:
-            self.logger.error("Assets list is empty or invalid")
-            raise ConfigurationError("Assets list is empty or invalid")
-
-    @async_error_handler
     async def fetch_news(self) -> None:
         """Fetch news articles."""
-        # Accessing the API key from the nested structure
-        bing_api_key = self.config.get('api_keys', {}).get('bing_api_key')
-        if not bing_api_key:
-            self.logger.error("Bing API key is not configured.")
-            raise ConfigurationError("Bing API key is missing in the configuration.")
-        
-        scraper = NewsScraperEnhanced(api_key=bing_api_key)  # Use the loaded API key
-        scraper.fetch_news()  # Correct method call
-        self.logger.info("News articles fetched.")
+        try:
+            scraper = NewsScraperEnhanced(config_path="config/config.yaml")
+            scraper.fetch_news()
+            self.logger.info("News articles fetched.")
+        except Exception as e:
+            self.logger.error(f"Error fetching news: {e}")
+            raise
 
-    @async_error_handler
     async def update_candles(self) -> None:
         """Update candle data."""
-        continuous_data_update()
-        self.logger.info("Candle data updated.")
+        try:
+            candles_update()
+            self.logger.info("Candle data updated.")
+        except Exception as e:
+            self.logger.error(f"Error updating candle data: {e}")
+            raise
 
-    @async_error_handler
     async def update_yfinance(self) -> None:
-        """Update yfinance data."""
-        yfinance_update()
-        self.logger.info("YFinance data updated.")
+        """Update Yahoo Finance data."""
+        try:
+            # Directly specify the correct symbols
+            assets = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "GC=F"]
+            self.logger.info(f"Updating Yahoo Finance data for assets: {assets}")
+            yfinance_update(assets=assets)
+            self.logger.info("Yahoo Finance data updated.")
+        except Exception as e:
+            self.logger.error(f"Error updating Yahoo Finance data: {e}")
+            raise
 
-    @async_error_handler
     async def preprocess_data(self) -> None:
         """Preprocess data."""
-        preprocess_main()
-        self.logger.info("Data preprocessed.")
+        try:
+            preprocess_main()
+            self.logger.info("Data preprocessing completed.")
+        except Exception as e:
+            self.logger.error(f"Error during data preprocessing: {e}")
+            raise
 
-    @async_error_handler
-    async def train_model(self) -> None:
-        """Train the model."""
-        train_model()
-        self.logger.info("Model trained.")
+    async def train_models(self) -> None:
+        """Train models for each asset."""
+        try:
+            for asset in self.config['assets']:
+                self.logger.info(f"Training model for {asset}...")
+                train_model(symbol=asset)
+            self.logger.info("All models trained successfully.")
+        except Exception as e:
+            self.logger.error(f"Error training models: {e}")
+            raise
 
-    @async_error_handler
     async def run_backtest(self) -> None:
         """Run backtest."""
-        backtest = Backtest()
-        backtest.run()  # Assuming you have a run method in Backtest
-        self.logger.info("Backtest completed.")
+        try:
+            assets = self.config.get('assets', [])
+            initial_balance = self.config.get('initial_balance', 10000)
+            backtest = Backtest(assets, initial_balance)
+            backtest.run_backtest()
+            self.logger.info("Backtest completed.")
+        except Exception as e:
+            self.logger.error(f"Error during backtest: {e}")
+            raise
 
-    @async_error_handler
     async def execute_trades(self) -> None:
         """Execute trades."""
-        trader = MT5Trader(self.config_path)
-        trader.trade_on_predictions()
-        trader.shutdown_mt5()
-        self.logger.info("Trades executed.")
+        try:
+            trader = MT5Trader(self.config_path)
+            trader.trade_on_predictions()
+            trader.shutdown_mt5()
+            self.logger.info("Trades executed successfully.")
+        except Exception as e:
+            self.logger.error(f"Error executing trades: {e}")
+            raise
 
-    async def run_tasks(self) -> None:
-        """Run all tasks in sequence with a delay."""
-        while self.running:
-            await self.fetch_news()
-            await asyncio.sleep(3600)  # Sleep for 1 hour
-
-            await self.update_candles()
-            await asyncio.sleep(3600)  # Sleep for 1 hour
-
-            await self.update_yfinance()
-            await asyncio.sleep(3600)  # Sleep for 1 hour
-
-            await self.preprocess_data()
-            await asyncio.sleep(3600)  # Sleep for 1 hour
-
-            await self.train_model()
-            await asyncio.sleep(3600)  # Sleep for 1 hour
-
-            await self.run_backtest()
-            await asyncio.sleep(3600)  # Sleep for 1 hour
-
-            await self.execute_trades()
-            await asyncio.sleep(3600)  # Sleep for 1 hour
+    async def run_sequence(self) -> None:
+        """Run all tasks in sequence, then pause for 30 minutes."""
+        while True:
+            try:
+                await self.fetch_news()
+                await self.update_candles()
+                await self.update_yfinance()
+                await self.preprocess_data()
+                await self.train_models()
+                await self.run_backtest()
+                await self.execute_trades()
+                self.logger.info("All tasks completed. Waiting for 30 minutes...")
+                await asyncio.sleep(1800)  # 30-minute delay
+            except Exception as e:
+                self.logger.error(f"Error during execution: {e}")
+                self.logger.info("Retrying in 5 minutes...")
+                await asyncio.sleep(300)  # Retry after 5 minutes
 
     def start(self) -> None:
         """Start the trading bot."""
-        self.load_config()
-        self.running = True
-        asyncio.run(self.run_tasks())
+        try:
+            self.load_config()
+            asyncio.run(self.run_sequence())
+        except KeyboardInterrupt:
+            self.logger.info("Trading bot stopped.")
+        except ConfigurationError as e:
+            self.logger.error(f"Configuration error: {e}")
 
-    def stop(self) -> None:
-        """Stop the trading bot."""
-        self.running = False
 
 if __name__ == "__main__":
     bot = AsyncTradingBot('config/config.yaml')
-    try:
-        bot.start()
-    except KeyboardInterrupt:
-        bot.stop()
-        bot.logger.info("Trading bot stopped.")
+    bot.start()

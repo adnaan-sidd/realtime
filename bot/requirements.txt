@@ -12,7 +12,6 @@ seaborn
 ta
 optuna
 textblob
-metaapi-cloud-sdk
 tensorflow==2.15.0
 yfinance
 flask-socketio
@@ -22,3 +21,4 @@ aioschedule
 backoff
 yahoo_fin
 tenacity
+yahooquery
