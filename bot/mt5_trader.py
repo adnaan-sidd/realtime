@@ -26,6 +26,7 @@ class MT5Trader:
         self.config = self.load_config()
         self.logger = self._setup_logging()
         self.credentials = self.get_mt5_credentials()
+        self.available_balance = None
         self.initialize_mt5()
 
     @staticmethod
@@ -64,7 +65,7 @@ class MT5Trader:
 
     def _validate_config(self, config: Dict[str, Any]) -> None:
         """Validate configuration parameters."""
-        required_fields = ['mt5_credentials', 'assets', 'email', 'trading_preferences']
+        required_fields = ['mt5_credentials', 'assets', 'email', 'trading_preferences', 'risk_management']
         mt5_required_fields = ['account_number', 'password', 'server']
         email_required_fields = ['sender', 'recipient', 'smtp_server', 'smtp_port', 'password']
 
@@ -97,6 +98,8 @@ class MT5Trader:
         for attempt in range(retries):
             if mt5.initialize(login=self.credentials['login'], password=self.credentials['password'], server=self.credentials['server']):
                 self.logger.info("MT5 connection initialized successfully")
+                self.available_balance = self.get_account_balance()
+                self.logger.info(f"Available account balance: {self.available_balance}")
                 return
             else:
                 error_code = mt5.last_error()
@@ -208,83 +211,68 @@ class MT5Trader:
             account_balance
         )
 
-        order_type = mt5.ORDER_TYPE_BUY if action == 'buy' else mt5.ORDER_TYPE_SELL
         request = {
-            'action': mt5.TRADE_ACTION_DEAL,
-            'symbol': symbol,
-            'volume': position_size,
-            'type': order_type,
-            'price': price,
-            'sl': stop_loss,
-            'tp': take_profit,
-            'deviation': 10,
-            'magic': 234000,
-            'comment': 'Python script open',
-            'type_time': mt5.ORDER_TIME_GTC,
-            'type_filling': mt5.ORDER_FILLING_FOK,
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": position_size,
+            "type": mt5.ORDER_TYPE_BUY if action == 'buy' else mt5.ORDER_TYPE_SELL,
+            "price": price,
+            "sl": stop_loss,
+            "tp": take_profit,
+            "deviation": 10,
+            "magic": 234000,
+            "comment": "Trade based on predictions",
+            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_time": mt5.ORDER_TIME_GTC
         }
+
         result = mt5.order_send(request)
         if result.retcode != mt5.TRADE_RETCODE_DONE:
-            self.logger.error(f"Trade execution failed: {result.retcode} - {result.comment}")
-            self.send_email("Trade Execution Failed", f"Trade execution failed: {result.retcode} - {result.comment}")
+            self.logger.error(f"Failed to send trade order: {result.comment}")
             return False
 
-        self.logger.info(f"Trade executed successfully: {action} {position_size} {symbol} at {price} SL: {stop_loss}, TP: {take_profit}")
-
-        threading.Thread(target=self._wait_and_close_trade, args=(symbol, order_type, position_size, duration)).start()
-
+        self.logger.info(f"Trade executed: {action} {symbol} at {price} with volume {position_size}")
         return True
 
-    def _wait_and_close_trade(self, symbol: str, order_type: int, position_size: float, duration: int) -> None:
-        """Wait for the specified duration and then close the trade."""
-        time.sleep(duration)
-        self.close_trade(symbol, order_type, position_size)
-
-    def close_trade(self, symbol: str, order_type: int, position_size: float) -> None:
-        """Close a trade on MT5."""
-        close_order_type = mt5.ORDER_TYPE_SELL if order_type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
-        close_request = {
-            'action': mt5.TRADE_ACTION_DEAL,
-            'symbol': symbol,
-            'volume': position_size,
-            'type': close_order_type,
-            'deviation': 10,
-            'magic': 234000,
-            'comment': 'Python script close',
-            'type_time': mt5.ORDER_TIME_GTC,
-            'type_filling': mt5.ORDER_FILLING_FOK,
-        }
-
-        result = mt5.order_send(close_request)
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            self.logger.error(f"Trade closure failed: {result.retcode} - {result.comment}")
-            self.send_email("Trade Closure Failed", f"Trade closure failed: {result.retcode} - {result.comment}")
-        else:
-            self.logger.info(f"Trade closed successfully for {symbol}")
-
     def trade_on_predictions(self) -> None:
-        """Execute trades based on model predictions."""
-        for symbol in self.config['assets']:
-            prediction, duration = make_predictions(symbol)
-            if prediction is not None:
-                if prediction[0] > 0:
+        """Main function for trading based on predictions."""
+        symbols = self.config['assets']  # List of trading symbols from config
+        for symbol in symbols:
+            try:
+                # Get the prediction result
+                prediction_tuple = make_predictions(symbol)  # Returns a tuple (array, time)
+                prediction_values = prediction_tuple[0]  # The first element is the predicted price array
+                self.logger.info(f"Prediction for {symbol}: {prediction_values}")
+
+                # For simplicity, let's assume the last value in the array is the predicted price
+                latest_prediction = prediction_values[-1]
+
+                # You can add some logic here to decide whether to buy or sell based on the prediction
+                if latest_prediction > 1.05:  # Example: If the predicted price is greater than 1.05, buy
                     action = 'buy'
-                else:
+                elif latest_prediction < 1.02:  # Example: If the predicted price is less than 1.02, sell
                     action = 'sell'
-                self.execute_trade(symbol, action, duration)
-            else:
-                self.logger.warning(f"No prediction available for {symbol}")
+                else:
+                    action = 'hold'  # If the price is within a certain range, do nothing
 
-    def reload_config(self) -> None:
-        """Reload the configuration from the YAML file."""
-        self.config = self.load_config()
-        self.credentials = self.get_mt5_credentials()
-        self.logger.info("Configuration reloaded successfully")
+                # Only execute trade if action is 'buy' or 'sell'
+                if action in ['buy', 'sell']:
+                    duration = self.config['trading_preferences'].get('trade_duration', 60)
+                    self.execute_trade(symbol, action, duration)
+                else:
+                    self.logger.info(f"Holding position for {symbol} as price is within the range.")
 
+            except Exception as e:
+                self.logger.error(f"Error processing symbol {symbol}: {e}")
 
-if __name__ == "__main__":
-    trader = MT5Trader('config/config.yaml')
+if __name__ == '__main__':
+    # Path to your config.yaml file
+    config_path = 'config/config.yaml'  # Correct path for the config file
+    trader = MT5Trader(config_path)
+
     try:
         trader.trade_on_predictions()
+    except Exception as e:
+        trader.logger.error(f"An error occurred: {e}")
     finally:
         trader.shutdown_mt5()

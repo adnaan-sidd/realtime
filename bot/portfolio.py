@@ -2,6 +2,7 @@ import logging
 
 class PortfolioManager:
     def __init__(self, initial_balance):
+        self.initial_balance = initial_balance
         self.balance = initial_balance
         self.positions = []
         self.margin = 0
@@ -44,6 +45,22 @@ class PortfolioManager:
     def monitor_margin(self):
         # Implement margin monitoring logic here
         pass
+
+    def get_open_positions(self):
+        return self.positions
+
+    def calculate_total_profit_loss(self):
+        total_pnl = 0
+        for position in self.positions:
+            current_price = self.get_current_price(position['symbol'])
+            profit_loss = (current_price - position['price']) * position['volume'] if position['side'] == 'buy' else (position['price'] - current_price) * position['volume']
+            total_pnl += profit_loss
+        return total_pnl
+
+    def get_current_price(self, symbol):
+        # Placeholder for getting the current price of the symbol
+        # In a real implementation, this would fetch the latest market price
+        return 100  # Example price
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

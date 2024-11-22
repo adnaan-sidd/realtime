@@ -1,8 +1,9 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, Attention
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau, TensorBoard
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, Conv1D, MaxPooling1D, Flatten, Input, Attention
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau, TensorBoard, LearningRateScheduler
+from tensorflow.keras.models import Model
 from sklearn.model_selection import train_test_split
 import os
 import pickle
@@ -13,9 +14,9 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def create_lstm_model(input_shape: tuple, units: list = [128, 64, 32], dropout_rate: float = 0.2) -> tf.keras.Model:
+def create_hybrid_model(input_shape: tuple, units: list = [128, 64, 32], dropout_rate: float = 0.2) -> tf.keras.Model:
     """
-    Create LSTM model architecture.
+    Create a hybrid CNN-LSTM model architecture.
     
     Args:
         input_shape (tuple): Shape of input data (sequence_length, features)
@@ -23,23 +24,33 @@ def create_lstm_model(input_shape: tuple, units: list = [128, 64, 32], dropout_r
         dropout_rate (float): Dropout rate between layers
         
     Returns:
-        tf.keras.Model: Compiled LSTM model
+        tf.keras.Model: Compiled hybrid CNN-LSTM model
     """
-    model = Sequential()
+    inputs = Input(shape=input_shape)
 
-    model.add(Bidirectional(LSTM(units[0], return_sequences=True, input_shape=input_shape)))
-    model.add(Dropout(dropout_rate))
+    # Convolutional layers
+    x = Conv1D(filters=64, kernel_size=3, activation='relu')(inputs)
+    x = MaxPooling1D(pool_size=2)(x)
+    x = Dropout(dropout_rate)(x)
+
+    # LSTM layers
+    x = Bidirectional(LSTM(units[0], return_sequences=True))(x)
+    x = Dropout(dropout_rate)(x)
 
     for unit in units[1:-1]:
-        model.add(Bidirectional(LSTM(unit, return_sequences=True)))
-        model.add(Dropout(dropout_rate))
+        x = Bidirectional(LSTM(unit, return_sequences=True))(x)
+        x = Dropout(dropout_rate)(x)
 
-    model.add(Bidirectional(LSTM(units[-1], return_sequences=True)))
-    model.add(Attention())
-    model.add(Dropout(dropout_rate))
-    model.add(Dense(64, activation='relu'))
-    model.add(Dense(1))  # Output layer
-    
+    x = Bidirectional(LSTM(units[-1], return_sequences=True))(x)
+
+    # Attention layer
+    attention = Attention()([x, x])
+    x = Dropout(dropout_rate)(attention)
+    x = Flatten()(x)
+    x = Dense(64, activation='relu')(x)
+    outputs = Dense(1)(x)  # Output layer
+
+    model = Model(inputs, outputs)
     return model
 
 def load_data(symbol: str):
@@ -63,7 +74,7 @@ def load_data(symbol: str):
 def train_model(symbol: str, epochs: int = 100, batch_size: int = 32, validation_split: float = 0.2, 
                 early_stopping_patience: int = 20):
     """
-    Train LSTM model and return the latest prediction.
+    Train hybrid CNN-LSTM model and return the latest prediction.
     
     Args:
         symbol (str): Trading symbol (e.g., 'EURUSD')
@@ -88,14 +99,15 @@ def train_model(symbol: str, epochs: int = 100, batch_size: int = 32, validation
             X, y = load_data(symbol)
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
 
-            model = create_lstm_model(input_shape=(X.shape[1], X.shape[2]))
+            model = create_hybrid_model(input_shape=(X.shape[1], X.shape[2]))
             model.compile(optimizer='adam', loss='mse', metrics=['mae', 'mse'])
 
             callbacks = [
                 EarlyStopping(monitor='val_loss', patience=early_stopping_patience, restore_best_weights=True),
                 ModelCheckpoint(model_path, monitor='val_loss', save_best_only=True),
                 ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6),
-                tensorboard_callback
+                tensorboard_callback,
+                LearningRateScheduler(lambda epoch: 1e-3 * 10 ** (-epoch / 20))
             ]
 
             history = model.fit(
