@@ -1,3 +1,20 @@
+import os
+import tensorflow as tf
+import logging
+import warnings
+
+# Disable OneDNN optimizations
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+
+# Set TensorFlow logging level to suppress info logs
+tf.get_logger().setLevel('ERROR')
+
+# Suppress deprecation warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+# Suppress TensorFlow related warning logs
+logging.getLogger('tensorflow').setLevel(logging.ERROR)
+
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
@@ -189,6 +206,26 @@ def make_predictions(symbol: str) -> tuple:
     predictions = model.predict(X, verbose=0)
     predictions_unscaled = close_scaler.inverse_transform(predictions)
     return predictions_unscaled.flatten(), 3600  # Example duration of 1 hour; adjust if needed
+
+def update_model_with_new_data(symbol: str, new_X: np.ndarray, new_y: np.ndarray):
+    """
+    Update the model with new data.
+    
+    Args:
+        symbol (str): Trading symbol
+        new_X (np.ndarray): New input features
+        new_y (np.ndarray): New target values
+    """
+    try:
+        model_path = f'models/{symbol}_best_model.keras'
+        if os.path.exists(model_path):
+            model = tf.keras.models.load_model(model_path)
+            model.fit(new_X, new_y, epochs=10, batch_size=32, verbose=1)  # Adjust parameters as needed
+            model.save(model_path)
+        else:
+            logger.error(f"Model for {symbol} not found. Please train the model first.")
+    except Exception as e:
+        logger.error(f"Error updating model for {symbol} with new data: {e}")
 
 if __name__ == "__main__":
     os.makedirs('models', exist_ok=True)

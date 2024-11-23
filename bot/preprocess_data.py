@@ -283,6 +283,29 @@ class PreprocessingPipeline:
                 except Exception as e:
                     logger.error(f"Error processing symbol: {e}")
 
+def preprocess_new_data(symbol: str, new_data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, dict]:
+    # Assuming `Config` is already instantiated as `config`
+    sequence_prep = SequencePreparation(config)
+    feature_engine = FeatureEngine(config)
+
+    try:
+        # Load existing data
+        data_loader = DataLoader(symbol, config)
+        merged_data = data_loader.load_and_merge_data(sentiment_file)
+
+        # Add new data to the existing data
+        merged_data = pd.concat([merged_data, new_data]).drop_duplicates().sort_index()
+        data_with_indicators = feature_engine.calculate_technical_indicators(merged_data)
+        data_filled = data_with_indicators.ffill().bfill()
+
+        # Prepare sequences
+        X, y, scalers = sequence_prep.prepare_sequences(data_filled)
+        return X, y, scalers
+
+    except Exception as e:
+        logger.error(f"Error preprocessing new data for {symbol}: {e}")
+        raise
+
 def main():
     """Main execution function."""
     try:
