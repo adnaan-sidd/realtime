@@ -1,7 +1,14 @@
 import os
+import numpy as np
 import tensorflow as tf
 import logging
 import warnings
+import pickle
+import json
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, Conv1D, MaxPooling1D, Flatten, Input, Attention
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau, TensorBoard, LearningRateScheduler
 
 # Disable OneDNN optimizations
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
@@ -14,18 +21,6 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Suppress TensorFlow related warning logs
 logging.getLogger('tensorflow').setLevel(logging.ERROR)
-
-import numpy as np
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, Conv1D, MaxPooling1D, Flatten, Input, Attention
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau, TensorBoard, LearningRateScheduler
-from tensorflow.keras.models import Model
-from sklearn.model_selection import train_test_split
-import os
-import pickle
-import json
-import logging
 
 # Set up logging configuration
 logging.basicConfig(level=logging.INFO)
