@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
-from typing import Tuple, List, Dict, Any
+from typing import Tuple
 import os
 import pickle
 import ast
@@ -43,17 +43,13 @@ class Config:
 
         self.assets = self.config['assets']
         self.sequence_length = self.config['model_params']['sequence_length']
-        self.lookback_period = self.config['preprocessing']['lookback_period']
         self.feature_columns = self.config['preprocessing']['feature_columns']
-
-        self.bing_api_key = self.config['api_keys']['bing_api_key']
-        self.bing_custom_config_id = self.config['api_keys']['bing_custom_config_id']
 
         logger.info("Configuration loaded successfully")
 
     def validate_config(self):
         """Validate the configuration to ensure all necessary fields are present."""
-        required_fields = ['assets', 'model_params', 'preprocessing', 'api_keys', 'system']
+        required_fields = ['assets', 'model_params', 'preprocessing', 'system']
         for field in required_fields:
             if field not in self.config:
                 raise ValueError(f"Missing required configuration field: {field}")
@@ -61,13 +57,6 @@ class Config:
 class DataLoader:
     """Handles loading and merging of market and sentiment data."""
     def __init__(self, symbol: str, config: Config):
-        """
-        Initialize DataLoader with a symbol and configuration.
-
-        Args:
-            symbol (str): The market symbol to load data for.
-            config (Config): The configuration object.
-        """
         self.symbol = symbol
         self.config = config
         logger.info(f"Initializing DataLoader for {symbol}")
@@ -76,8 +65,11 @@ class DataLoader:
         """Load and merge market data with sentiment data."""
         try:
             data_dir = self.config.config['system']['data_directory']
-            yfinance_file = os.path.join(data_dir, 'yfinance', 'gold_yf.csv') if self.symbol == "XAUUSD" else \
-                           os.path.join(data_dir, 'yfinance', f'{self.symbol}_yf.csv')
+            # Modify the file naming for gold asset
+            if self.symbol == "XAUUSD":
+                yfinance_file = os.path.join(data_dir, 'yfinance', 'gold_yf.csv')
+            else:
+                yfinance_file = os.path.join(data_dir, 'yfinance', f'{self.symbol}_yf.csv')
 
             logger.info(f"Loading yfinance data from: {yfinance_file}")
             yfinance_data = self.load_yfinance_data(yfinance_file)
@@ -234,6 +226,10 @@ class SequencePreparation:
             y = np.array(y)
 
             logger.info(f"Sequences prepared. X shape: {X.shape}, y shape: {y.shape}")
+
+            if X.size == 0 or y.size == 0:
+                logger.warning("Either X or y is empty! Check the input data.")
+
             return X, y, scalers
 
         except Exception as e:
@@ -260,78 +256,49 @@ class PreprocessingPipeline:
 
             X, y, scalers = sequence_prep.prepare_sequences(data_filled)
 
+            # Save processed data
+            np.save(f'data/{symbol}_X.npy', X)
+            np.save(f'data/{symbol}_y.npy', y)
+
+            # Save scalers
             data_dir = self.config.config['system']['data_directory']
             scaler_path = os.path.join(data_dir, f'{symbol}_scalers.pkl')
             with open(scaler_path, 'wb') as f:
                 pickle.dump(scalers, f)
             logger.info(f"Saved scalers to: {scaler_path}")
-
             logger.info(f"Preprocessing completed for {symbol}. Shape: X: {X.shape}, y: {y.shape}")
             return X, y, scalers
 
         except Exception as e:
-            logger.error(f"Error processing {symbol}: {str(e)}")
+            logger.error(f"Error processing symbol {symbol}: {e}")
             raise
 
     def process_all_symbols(self, sentiment_file: str):
-        """Process all symbols in parallel."""
+        """Process all symbols using multithreading."""
         with ThreadPoolExecutor(max_workers=4) as executor:
             futures = [executor.submit(self.process_symbol, symbol, sentiment_file) for symbol in self.config.assets]
             for future in futures:
                 try:
                     future.result()
                 except Exception as e:
-                    logger.error(f"Error processing symbol: {e}")
-
-def preprocess_new_data(symbol: str, new_data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, dict]:
-    # Assuming `Config` is already instantiated as `config`
-    sequence_prep = SequencePreparation(config)
-    feature_engine = FeatureEngine(config)
-
-    try:
-        # Load existing data
-        data_loader = DataLoader(symbol, config)
-        merged_data = data_loader.load_and_merge_data(sentiment_file)
-
-        # Add new data to the existing data
-        merged_data = pd.concat([merged_data, new_data]).drop_duplicates().sort_index()
-        data_with_indicators = feature_engine.calculate_technical_indicators(merged_data)
-        data_filled = data_with_indicators.ffill().bfill()
-
-        # Prepare sequences
-        X, y, scalers = sequence_prep.prepare_sequences(data_filled)
-        return X, y, scalers
-
-    except Exception as e:
-        logger.error(f"Error preprocessing new data for {symbol}: {e}")
-        raise
+                    logger.error(f"Error in processing: {e}")
 
 def main():
-    """Main execution function."""
     try:
         logger.info("Starting preprocessing pipeline...")
-
-        required_dirs = ['data', 'data/yfinance', 'data/candles', 'logs']
-        for directory in required_dirs:
-            os.makedirs(directory, exist_ok=True)
-            logger.info(f"Ensuring directory exists: {directory}")
-
         config = Config('config/config.yaml')
-        pipeline = PreprocessingPipeline(config)
-
-        data_dir = config.config['system']['data_directory']
-        sentiment_file = os.path.join(data_dir, 'sentiment_data.csv')
-
+        sentiment_file = os.path.join(config.config['system']['data_directory'], 'sentiment_data.csv')
+        
         if not os.path.exists(sentiment_file):
             logger.error(f"Sentiment data file not found: {sentiment_file}")
-            return
+            raise FileNotFoundError(sentiment_file)
 
+        pipeline = PreprocessingPipeline(config)
         pipeline.process_all_symbols(sentiment_file)
-
         logger.info("Preprocessing pipeline completed successfully")
 
     except Exception as e:
-        logger.error(f"Pipeline execution failed: {str(e)}", exc_info=True)
+        logger.error(f"Pipeline execution failed: {e}", exc_info=True)
         raise
 
 if __name__ == "__main__":
