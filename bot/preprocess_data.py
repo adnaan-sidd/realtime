@@ -162,11 +162,13 @@ class FeatureEngine:
             logger.info("Calculating technical indicators")
             df['Returns'] = df['Close'].pct_change(fill_method=None)
 
+            # Existing technical indicators
             short_window = self.config.config['strategies']['ma_crossover']['short_window']
             long_window = self.config.config['strategies']['ma_crossover']['long_window']
             df[f'SMA_{short_window}'] = df['Close'].rolling(window=short_window).mean()
             df[f'SMA_{long_window}'] = df['Close'].rolling(window=long_window).mean()
 
+            # RSI
             rsi_period = self.config.config['strategies']['rsi']['period']
             delta = df['Close'].diff()
             gain = delta.where(delta > 0, 0).rolling(window=rsi_period).mean()
@@ -174,12 +176,32 @@ class FeatureEngine:
             rs = gain / loss
             df['RSI'] = 100 - (100 / (1 + rs))
 
+            # Bollinger Bands
             bb_window = self.config.config['strategies']['bollinger']['window']
             bb_std = self.config.config['strategies']['bollinger']['num_std']
             df['BB_middle'] = df['Close'].rolling(window=bb_window).mean()
             df['BB_upper'] = df['BB_middle'] + bb_std * df['Close'].rolling(window=bb_window).std()
             df['BB_lower'] = df['BB_middle'] - bb_std * df['Close'].rolling(window=bb_window).std()
 
+            # Additional strategies: MACD
+            macd_fast = self.config.config['strategies']['macd']['fast']
+            macd_slow = self.config.config['strategies']['macd']['slow']
+            macd_signal = self.config.config['strategies']['macd']['signal']
+            ema_fast = df['Close'].ewm(span=macd_fast, adjust=False).mean()
+            ema_slow = df['Close'].ewm(span=macd_slow, adjust=False).mean()
+            df['MACD_line'] = ema_fast - ema_slow
+            df['MACD_signal'] = df['MACD_line'].ewm(span=macd_signal, adjust=False).mean()
+            df['MACD_histogram'] = df['MACD_line'] - df['MACD_signal']
+
+            # Additional strategies: ATR
+            atr_period = self.config.config['strategies']['atr']['period']
+            high_low = df['High'] - df['Low']
+            high_close = (df['High'] - df['Close'].shift()).abs()
+            low_close = (df['Low'] - df['Close'].shift()).abs()
+            true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+            df['ATR'] = true_range.rolling(window=atr_period).mean()
+
+            # Volatility, Momentum, ROC (existing features)
             df['Volatility'] = df['Close'].rolling(window=20).std()
             df['Momentum'] = df['Close'] - df['Close'].shift(4)
             df['ROC'] = (df['Close'] - df['Close'].shift(12)) / df['Close'].shift(12) * 100

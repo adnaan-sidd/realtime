@@ -84,6 +84,12 @@ strategies:
   bollinger:
     window: 20
     num_std: 2
+  macd:
+    fast: 12
+    slow: 26
+    signal: 9
+  atr:
+    period: 14
 
 # Risk Management Configuration
 risk_management:
