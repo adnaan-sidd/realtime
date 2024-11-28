@@ -1,18 +1,30 @@
-import pandas as pd
-import numpy as np
-from sklearn.preprocessing import MinMaxScaler
-from typing import Tuple
 import os
 import pickle
+import logging
 import ast
 import yaml
-import logging
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
+from typing import Tuple, Dict, List
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
+# Constants
+CLOSE_COLUMN = 'Close'
+TIMESTAMP_COLUMN = 'timestamp'
+SENTIMENT_SCORES_COLUMN = 'sentiment_scores'
+
+# Custom Exceptions
+class DataLoaderError(Exception):
+    pass
+
+class ConfigError(Exception):
+    pass
+
 # Setup logging with both file and console handlers
-def setup_logging():
+def setup_logging() -> logging.Logger:
     os.makedirs('logs', exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
@@ -30,7 +42,7 @@ class Config:
     def __init__(self, config_path: str = 'config/config.yaml'):
         logger.info(f"Loading configuration from {config_path}")
         if not os.path.exists(config_path):
-            raise FileNotFoundError(f"Configuration file not found: {config_path}")
+            raise ConfigError(f"Configuration file not found: {config_path}")
 
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
@@ -40,17 +52,17 @@ class Config:
         self.load_config_attributes()
         logger.info("Configuration loaded successfully")
 
-    def validate_config(self):
+    def validate_config(self) -> None:
         required_fields = ['assets', 'model_params', 'preprocessing', 'system']
         for field in required_fields:
             if field not in self.config:
-                raise ValueError(f"Missing required configuration field: {field}")
+                raise ConfigError(f"Missing required configuration field: {field}")
 
-    def setup_directories(self):
+    def setup_directories(self) -> None:
         os.makedirs(self.config['system']['data_directory'], exist_ok=True)
         os.makedirs(self.config['system']['log_directory'], exist_ok=True)
 
-    def load_config_attributes(self):
+    def load_config_attributes(self) -> None:
         self.assets = self.config['assets']
         self.sequence_length = self.config['model_params']['sequence_length']
         self.feature_columns = self.config['preprocessing']['feature_columns']
@@ -79,9 +91,9 @@ class DataLoader:
 
         except Exception as e:
             logger.error(f"Error while loading and merging data: {e}")
-            raise
+            raise DataLoaderError(f"Error while loading and merging data: {e}")
 
-    def get_yfinance_file(self, data_dir):
+    def get_yfinance_file(self, data_dir: str) -> str:
         if self.symbol == "XAUUSD":
             return os.path.join(data_dir, 'yfinance', 'gold_yf.csv')
         return os.path.join(data_dir, 'yfinance', f'{self.symbol}_yf.csv')
@@ -92,15 +104,15 @@ class DataLoader:
 
         df = pd.read_csv(file_path, index_col=0)
         df.index = pd.to_datetime(df.index, errors='coerce')
-        df = df[df.index.notnull()]
+        df = df[df.index.notnull()].copy()  # Avoid SettingWithCopyWarning
         df.index = df.index.tz_localize(None)  # Convert to tz-naive
         df.rename(columns=str.capitalize, inplace=True)
         return df
 
     def load_candles_data(self) -> pd.DataFrame:
-        candles_data = []
         candle_timeframes = ['D1', 'H1', 'H4', 'M15']
         data_dir = self.config.config['system']['data_directory']
+        candles_data = []
 
         for timeframe in candle_timeframes:
             candle_file = os.path.join(data_dir, 'candles', f'{self.symbol}_{timeframe}.csv')
@@ -116,19 +128,19 @@ class DataLoader:
             raise FileNotFoundError(f"Sentiment data file not found: {sentiment_file}")
 
         sentiment_data = pd.read_csv(sentiment_file)
-        sentiment_data['Date'] = pd.to_datetime(sentiment_data['timestamp'], errors='coerce')
-        sentiment_data = sentiment_data[sentiment_data['Date'].notnull()]
+        sentiment_data['Date'] = pd.to_datetime(sentiment_data[TIMESTAMP_COLUMN], errors='coerce')
+        sentiment_data = sentiment_data[sentiment_data['Date'].notnull()].copy()  # Avoid SettingWithCopyWarning
         sentiment_data.set_index('Date', inplace=True)
         sentiment_data.index = sentiment_data.index.tz_localize(None)  # Convert to tz-naive
         sentiment_data = self.process_sentiment_scores(sentiment_data)
         return sentiment_data
 
-    def process_sentiment_scores(self, sentiment_data):
-        sentiment_data['sentiment_scores'] = sentiment_data['sentiment_scores'].apply(ast.literal_eval)
-        sentiment_data['positive'] = sentiment_data['sentiment_scores'].apply(lambda x: x['score'] if x['label'] == 'POSITIVE' else 0)
-        sentiment_data['negative'] = sentiment_data['sentiment_scores'].apply(lambda x: x['score'] if x['label'] == 'NEGATIVE' else 0)
-        sentiment_data['neutral'] = sentiment_data['sentiment_scores'].apply(lambda x: x['score'] if x['label'] == 'NEUTRAL' else 0)
-        sentiment_data.drop(columns=['sentiment_scores'], inplace=True)
+    def process_sentiment_scores(self, sentiment_data: pd.DataFrame) -> pd.DataFrame:
+        sentiment_data[SENTIMENT_SCORES_COLUMN] = sentiment_data[SENTIMENT_SCORES_COLUMN].apply(ast.literal_eval)
+        sentiment_data['positive'] = sentiment_data[SENTIMENT_SCORES_COLUMN].apply(lambda x: x['score'] if x['label'] == 'POSITIVE' else 0)
+        sentiment_data['negative'] = sentiment_data[SENTIMENT_SCORES_COLUMN].apply(lambda x: x['score'] if x['label'] == 'NEGATIVE' else 0)
+        sentiment_data['neutral'] = sentiment_data[SENTIMENT_SCORES_COLUMN].apply(lambda x: x['score'] if x['label'] == 'NEUTRAL' else 0)
+        sentiment_data.drop(columns=[SENTIMENT_SCORES_COLUMN], inplace=True)
         return sentiment_data
 
 class FeatureEngine:
@@ -137,10 +149,10 @@ class FeatureEngine:
 
     def calculate_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         try:
-            df = self.validate_dataframe(df)
+            self.validate_dataframe(df)
 
             logger.info("Calculating technical indicators")
-            df['Returns'] = df['Close'].pct_change(fill_method=None)
+            df['Returns'] = df[CLOSE_COLUMN].pct_change(fill_method=None)
 
             self.calculate_moving_averages(df)
             self.calculate_rsi(df)
@@ -148,9 +160,9 @@ class FeatureEngine:
             self.calculate_macd(df)
             self.calculate_atr(df)
 
-            df['Volatility'] = df['Close'].rolling(window=20).std()
-            df['Momentum'] = df['Close'] - df['Close'].shift(4)
-            df['ROC'] = (df['Close'] - df['Close'].shift(12)) / df['Close'].shift(12) * 100
+            df['Volatility'] = df[CLOSE_COLUMN].rolling(window=20).std()
+            df['Momentum'] = df[CLOSE_COLUMN] - df[CLOSE_COLUMN].shift(4)
+            df['ROC'] = (df[CLOSE_COLUMN] - df[CLOSE_COLUMN].shift(12)) / df[CLOSE_COLUMN].shift(12) * 100
 
             logger.info("Technical indicators calculated successfully")
             return df
@@ -160,46 +172,46 @@ class FeatureEngine:
             raise
 
     def validate_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        if 'Close' not in df.columns:
+        if CLOSE_COLUMN not in df.columns:
             raise ValueError("DataFrame does not contain 'Close' column")
         return df.copy()
 
-    def calculate_moving_averages(self, df: pd.DataFrame):
+    def calculate_moving_averages(self, df: pd.DataFrame) -> None:
         short_window = self.config.config['strategies']['ma_crossover']['short_window']
         long_window = self.config.config['strategies']['ma_crossover']['long_window']
-        df[f'SMA_{short_window}'] = df['Close'].rolling(window=short_window).mean()
-        df[f'SMA_{long_window}'] = df['Close'].rolling(window=long_window).mean()
+        df[f'SMA_{short_window}'] = df[CLOSE_COLUMN].rolling(window=short_window).mean()
+        df[f'SMA_{long_window}'] = df[CLOSE_COLUMN].rolling(window=long_window).mean()
 
-    def calculate_rsi(self, df: pd.DataFrame):
+    def calculate_rsi(self, df: pd.DataFrame) -> None:
         rsi_period = self.config.config['strategies']['rsi']['period']
-        delta = df['Close'].diff()
+        delta = df[CLOSE_COLUMN].diff()
         gain = delta.where(delta > 0, 0).rolling(window=rsi_period).mean()
         loss = -delta.where(delta < 0, 0).rolling(window=rsi_period).mean()
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
 
-    def calculate_bollinger_bands(self, df: pd.DataFrame):
+    def calculate_bollinger_bands(self, df: pd.DataFrame) -> None:
         bb_window = self.config.config['strategies']['bollinger']['window']
         bb_std = self.config.config['strategies']['bollinger']['num_std']
-        df['BB_middle'] = df['Close'].rolling(window=bb_window).mean()
-        df['BB_upper'] = df['BB_middle'] + bb_std * df['Close'].rolling(window=bb_window).std()
-        df['BB_lower'] = df['BB_middle'] - bb_std * df['Close'].rolling(window=bb_window).std()
+        df['BB_middle'] = df[CLOSE_COLUMN].rolling(window=bb_window).mean()
+        df['BB_upper'] = df['BB_middle'] + bb_std * df[CLOSE_COLUMN].rolling(window=bb_window).std()
+        df['BB_lower'] = df['BB_middle'] - bb_std * df[CLOSE_COLUMN].rolling(window=bb_window).std()
 
-    def calculate_macd(self, df: pd.DataFrame):
+    def calculate_macd(self, df: pd.DataFrame) -> None:
         macd_fast = self.config.config['strategies']['macd']['fast']
         macd_slow = self.config.config['strategies']['macd']['slow']
         macd_signal = self.config.config['strategies']['macd']['signal']
-        ema_fast = df['Close'].ewm(span=macd_fast, adjust=False).mean()
-        ema_slow = df['Close'].ewm(span=macd_slow, adjust=False).mean()
+        ema_fast = df[CLOSE_COLUMN].ewm(span=macd_fast, adjust=False).mean()
+        ema_slow = df[CLOSE_COLUMN].ewm(span=macd_slow, adjust=False).mean()
         df['MACD_line'] = ema_fast - ema_slow
         df['MACD_signal'] = df['MACD_line'].ewm(span=macd_signal, adjust=False).mean()
         df['MACD_histogram'] = df['MACD_line'] - df['MACD_signal']
 
-    def calculate_atr(self, df: pd.DataFrame):
+    def calculate_atr(self, df: pd.DataFrame) -> None:
         atr_period = self.config.config['strategies']['atr']['period']
         high_low = df['High'] - df['Low']
-        high_close = (df['High'] - df['Close'].shift()).abs()
-        low_close = (df['Low'] - df['Close'].shift()).abs()
+        high_close = (df['High'] - df[CLOSE_COLUMN].shift()).abs()
+        low_close = (df['Low'] - df[CLOSE_COLUMN].shift()).abs()
         true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
         df['ATR'] = true_range.rolling(window=atr_period).mean()
 
@@ -208,7 +220,7 @@ class SequencePreparation:
         self.config = config
         self.sequence_length = config.sequence_length
 
-    def prepare_sequences(self, data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, dict]:
+    def prepare_sequences(self, data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, Dict[str, MinMaxScaler]]:
         try:
             logger.info("Preparing sequences for LSTM training")
             feature_columns = self.config.feature_columns
@@ -225,12 +237,12 @@ class SequencePreparation:
             logger.error(f"Error preparing sequences: {str(e)}")
             raise
 
-    def check_missing_columns(self, data: pd.DataFrame, feature_columns: list):
+    def check_missing_columns(self, data: pd.DataFrame, feature_columns: List[str]) -> None:
         missing_columns = [col for col in feature_columns if col not in data.columns]
         if missing_columns:
             raise ValueError(f"Missing columns in data: {missing_columns}")
 
-    def scale_data(self, data: pd.DataFrame, feature_columns: list) -> Tuple[dict, pd.DataFrame]:
+    def scale_data(self, data: pd.DataFrame, feature_columns: List[str]) -> Tuple[Dict[str, MinMaxScaler], pd.DataFrame]:
         scalers = {}
         scaled_data = pd.DataFrame(index=data.index)
 
@@ -241,16 +253,16 @@ class SequencePreparation:
 
         return scalers, scaled_data
 
-    def create_sequences(self, scaled_data: pd.DataFrame, feature_columns: list) -> Tuple[np.ndarray, np.ndarray]:
+    def create_sequences(self, scaled_data: pd.DataFrame, feature_columns: List[str]) -> Tuple[np.ndarray, np.ndarray]:
         logger.info("Creating sequences and labels")
         X, y = [], []
         data_values = scaled_data[feature_columns].values
-        close_values = scaled_data['Close'].values
+        close_values = scaled_data[CLOSE_COLUMN].values
 
         for i in range(len(data_values) - self.sequence_length):
             X.append(data_values[i:(i + self.sequence_length)])
-
-            # Create labels: Buy, Sell, Hold based on future price change
+            
+            # Determine labels: Buy (1), Sell (0), or Hold (2)
             if close_values[i + self.sequence_length] > close_values[i + self.sequence_length - 1]:
                 y.append(1)  # Buy
             elif close_values[i + self.sequence_length] < close_values[i + self.sequence_length - 1]:
@@ -264,7 +276,7 @@ class PreprocessingPipeline:
     def __init__(self, config: Config):
         self.config = config
 
-    def process_symbol(self, symbol: str, sentiment_file: str) -> Tuple[np.ndarray, np.ndarray, dict]:
+    def process_symbol(self, symbol: str, sentiment_file: str) -> Tuple[np.ndarray, np.ndarray, Dict[str, MinMaxScaler]]:
         try:
             logger.info(f"Starting preprocessing for {symbol}")
 
@@ -302,11 +314,10 @@ class PreprocessingPipeline:
             logger.error(f"Error processing symbol {symbol}: {e}")
             raise
 
-    def preprocess_new_data(self, symbol: str, new_data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, dict]:
+    def preprocess_new_data(self, symbol: str, new_data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, Dict[str, MinMaxScaler]]:
         """Process new data for a specific symbol and prepare for model updating."""
         try:
             logger.info(f"Processing new data for {symbol}...")
-            
             feature_engine = FeatureEngine(self.config)
             sequence_prep = SequencePreparation(self.config)
 
@@ -331,10 +342,8 @@ class PreprocessingPipeline:
         yfinance_file = self.get_yfinance_file(data_dir, symbol)
 
         if os.path.exists(yfinance_file):
-            # Check the last modified time of the new data file
             new_data_time = os.path.getmtime(yfinance_file)
 
-            # Check the existing processed files' modification times
             existing_X_file = f'data/{symbol}_X.npy'
             existing_y_file = f'data/{symbol}_y.npy'
 
@@ -342,21 +351,21 @@ class PreprocessingPipeline:
                 existing_X_time = os.path.getmtime(existing_X_file)
                 return new_data_time > existing_X_time  # Newer raw data found
 
-        return False  # No new data or files not found
+        return False
 
-    def get_yfinance_file(self, data_dir, symbol):
+    def get_yfinance_file(self, data_dir: str, symbol: str) -> str:
         if symbol == "XAUUSD":
             return os.path.join(data_dir, 'yfinance', 'gold_yf.csv')
         return os.path.join(data_dir, 'yfinance', f'{symbol}_yf.csv')
 
-    def load_scalers(self, symbol: str) -> dict:
+    def load_scalers(self, symbol: str) -> Dict[str, MinMaxScaler]:
         scaler_path = f'data/{symbol}_scalers.pkl'
         if os.path.exists(scaler_path):
             with open(scaler_path, 'rb') as f:
                 return pickle.load(f)
         return {}
 
-    def save_processed_data(self, symbol: str, X: np.ndarray, y: np.ndarray, scalers: dict):
+    def save_processed_data(self, symbol: str, X: np.ndarray, y: np.ndarray, scalers: Dict[str, MinMaxScaler]) -> None:
         np.save(f'data/{symbol}_X.npy', X)
         np.save(f'data/{symbol}_y.npy', y)
 
@@ -365,7 +374,7 @@ class PreprocessingPipeline:
             pickle.dump(scalers, f)
         logger.info(f"Saved scalers to: {scaler_path}")
 
-    def process_all_symbols(self, sentiment_file: str):
+    def process_all_symbols(self, sentiment_file: str) -> None:
         with ThreadPoolExecutor(max_workers=4) as executor:
             futures = [executor.submit(self.process_symbol, symbol, sentiment_file) for symbol in self.config.assets]
             for future in futures:
@@ -374,7 +383,7 @@ class PreprocessingPipeline:
                 except Exception as e:
                     logger.error(f"Error in processing: {e}")
 
-def main():
+def main() -> None:
     try:
         logger.info("Starting preprocessing pipeline...")
         config = Config('config/config.yaml')
