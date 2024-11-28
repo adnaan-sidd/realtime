@@ -22,3 +22,4 @@ backoff
 yahoo_fin
 tenacity
 yahooquery
+MetaTrader5
