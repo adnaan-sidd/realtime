@@ -4,6 +4,7 @@ from portfolio import PortfolioManager
 import yaml
 import logging
 import os
+import matplotlib.pyplot as plt
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -17,6 +18,7 @@ class Backtest:
     def __init__(self, assets, initial_balance=10000):
         self.assets = assets
         self.portfolio = PortfolioManager(initial_balance)
+        self.trade_history = []
 
     def simulate_trade(self, symbol, signal, price, volume):
         try:
@@ -25,6 +27,7 @@ class Backtest:
             elif signal == "Sell":
                 self.portfolio.open_position(symbol=symbol, side="sell", volume=volume, price=price)
             logger.info(f"Simulated {signal} trade for {symbol} at price {price} with volume {volume}")
+            self.trade_history.append((symbol, signal, price, volume))
         except Exception as e:
             logger.error(f"Error simulating trade for {symbol}: {e}")
 
@@ -72,6 +75,41 @@ class Backtest:
         for symbol in self.assets:
             logger.info(f"\nStarting backtest for {symbol}...")
             self.run_backtest_for_asset(symbol)
+        self.calculate_performance_metrics()
+        self.visualize_results()
+
+    def calculate_performance_metrics(self):
+        """Calculate and log performance metrics."""
+        balance = self.portfolio.get_balance()
+        initial_balance = self.portfolio.initial_balance
+        profit_loss = balance - initial_balance
+        roi = (profit_loss / initial_balance) * 100
+
+        logger.info(f"Initial Balance: ${initial_balance:.2f}")
+        logger.info(f"Final Balance: ${balance:.2f}")
+        logger.info(f"Profit/Loss: ${profit_loss:.2f}")
+        logger.info(f"Return on Investment (ROI): {roi:.2f}%")
+
+    def visualize_results(self):
+        """Visualize the backtest results."""
+        dates = [trade[0] for trade in self.trade_history]
+        prices = [trade[2] for trade in self.trade_history]
+        signals = [trade[1] for trade in self.trade_history]
+
+        plt.figure(figsize=(14, 7))
+        plt.plot(dates, prices, label='Price')
+        
+        buy_signals = [i for i in range(len(signals)) if signals[i] == 'Buy']
+        sell_signals = [i for i in range(len(signals)) if signals[i] == 'Sell']
+
+        plt.scatter([dates[i] for i in buy_signals], [prices[i] for i in buy_signals], marker='^', color='g', label='Buy Signal')
+        plt.scatter([dates[i] for i in sell_signals], [prices[i] for i in sell_signals], marker='v', color='r', label='Sell Signal')
+
+        plt.title('Backtest Results')
+        plt.xlabel('Date')
+        plt.ylabel('Price')
+        plt.legend()
+        plt.show()
 
 if __name__ == "__main__":
     assets = config["assets"]

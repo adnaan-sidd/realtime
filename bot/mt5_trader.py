@@ -6,26 +6,36 @@ import time
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime, time as dtime
-from typing import Dict, Any
-from models.lstm_model import make_predictions
-import threading
+from datetime import datetime, timedelta
+from typing import Dict, Any, List
+from models.lstm_model import make_predictions  # Ensure this is the correct import path
+from concurrent.futures import ThreadPoolExecutor
 import pytz  # Import pytz for timezone handling
+import tensorflow as tf
+import gc
 
+# Disable TensorFlow oneDNN custom operations warning
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Suppress TensorFlow logging
+tf.get_logger().setLevel('ERROR')
 
 class ConfigurationError(Exception):
     """Custom exception for configuration-related errors."""
     pass
 
-
 class MT5Trader:
     """Class to handle MT5 trading operations."""
+    
+    BUY_THRESHOLD = 1.05
+    SELL_THRESHOLD = 1.02
 
     def __init__(self, config_path: str):
         self.config_path = config_path
         self.config = self.load_config()
         self.logger = self._setup_logging()
         self.credentials = self.get_mt5_credentials()
+        self.available_balance = None
+        self.existing_trades = []
         self.initialize_mt5()
 
     @staticmethod
@@ -34,26 +44,26 @@ class MT5Trader:
         os.makedirs('logs', exist_ok=True)
         logger = logging.getLogger(__name__)
         logger.setLevel(logging.DEBUG)
-
+        
         formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
         stream_handler = logging.StreamHandler()
         stream_handler.setFormatter(formatter)
         stream_handler.setLevel(logging.INFO)
-
+        
         file_handler = logging.FileHandler(f'logs/mt5_trader_{datetime.now().strftime("%Y%m%d")}.log')
         file_handler.setFormatter(formatter)
         file_handler.setLevel(logging.DEBUG)
-
+        
         logger.addHandler(stream_handler)
         logger.addHandler(file_handler)
-
+        
         return logger
-
+    
     def load_config(self) -> Dict[str, Any]:
         """Load and validate YAML configuration."""
         if not os.path.exists(self.config_path):
             raise ConfigurationError(f"Config file not found at {self.config_path}")
-
+        
         try:
             with open(self.config_path, 'r') as file:
                 config = yaml.safe_load(file)
@@ -61,21 +71,21 @@ class MT5Trader:
             return config
         except yaml.YAMLError as e:
             raise ConfigurationError(f"Error parsing YAML configuration: {e}")
-
+    
     def _validate_config(self, config: Dict[str, Any]) -> None:
         """Validate configuration parameters."""
-        required_fields = ['mt5_credentials', 'assets', 'email', 'trading_preferences']
+        required_fields = ['mt5_credentials', 'assets', 'email', 'trading_preferences', 'risk_management']
         mt5_required_fields = ['account_number', 'password', 'server']
         email_required_fields = ['sender', 'recipient', 'smtp_server', 'smtp_port', 'password']
-
+        
         missing_fields = [field for field in required_fields if field not in config]
         if missing_fields:
             raise ConfigurationError(f"Missing required fields in config: {missing_fields}")
-
+        
         missing_mt5_fields = [field for field in mt5_required_fields if field not in config['mt5_credentials']]
         if missing_mt5_fields:
             raise ConfigurationError(f"Missing required MT5 credentials: {missing_mt5_fields}")
-
+        
         missing_email_fields = [field for field in email_required_fields if field not in config['email']]
         if missing_email_fields:
             raise ConfigurationError(f"Missing required email configuration: {missing_email_fields}")
@@ -97,6 +107,9 @@ class MT5Trader:
         for attempt in range(retries):
             if mt5.initialize(login=self.credentials['login'], password=self.credentials['password'], server=self.credentials['server']):
                 self.logger.info("MT5 connection initialized successfully")
+                self.available_balance = self.get_account_balance()
+                self.logger.info(f"Available account balance: {self.available_balance}")
+                self.existing_trades = self.fetch_existing_trades()
                 return
             else:
                 error_code = mt5.last_error()
@@ -117,7 +130,7 @@ class MT5Trader:
         msg['To'] = config['recipient']
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain'))
-
+        
         try:
             with smtplib.SMTP(config['smtp_server'], config['smtp_port']) as server:
                 server.starttls()
@@ -135,13 +148,18 @@ class MT5Trader:
             return None
         return account_info.balance
 
+    def fetch_existing_trades(self) -> List[Dict[str, Any]]:
+        """Fetch existing trades from the account."""
+        return [trade for trade in mt5.positions_get() if trade]
+
     def calculate_position_size(self, risk: float, stop_loss: float, account_balance: float) -> float:
         """Calculate the position size based on risk management."""
         risk_amount = account_balance * risk
         position_size = risk_amount / stop_loss
+        # Ensure the position size is within defined constraints
         return min(max(position_size, self.config['risk_management']['base_position_size']),
                    self.config['risk_management']['max_position_size'])
-
+    
     def is_market_open(self, symbol: str) -> bool:
         """Check if the market for the given symbol is open."""
         market_info = mt5.symbol_info(symbol)
@@ -156,7 +174,7 @@ class MT5Trader:
 
         server_time = tick_info.time
         current_time = datetime.fromtimestamp(server_time)
-
+        
         timezone_str = self.config['trading_preferences'].get('timezone', 'UTC')
         start_hour = self.config['trading_preferences'].get('start_hour', 0)
         end_hour = self.config['trading_preferences'].get('end_hour', 23)
@@ -166,24 +184,24 @@ class MT5Trader:
         except pytz.UnknownTimeZoneError:
             self.logger.error(f"Unknown timezone: {timezone_str}. Defaulting to UTC.")
             timezone = pytz.utc
-
+        
         current_time = current_time.astimezone(timezone)
-
-        return dtime(start_hour, 0) <= current_time.time() <= dtime(end_hour, 0)
-
-    def execute_trade(self, symbol: str, action: str, duration: int) -> bool:
+        return start_hour <= current_time.hour <= end_hour
+    
+    def execute_trade(self, symbol: str, action: str) -> bool:
         """Execute a trade on MT5 with risk management."""
         if action not in ['buy', 'sell']:
-            self.logger.error(f"Invalid trade action: {action}")
+            self.logger.error(f"Invalid trade action: {action}.")
             return False
 
         if not self.is_market_open(symbol):
             self.logger.error(f"Market closed for symbol {symbol}. Cannot execute trade.")
             return False
 
+        # Check if symbol is visible in market
         symbol_info = mt5.symbol_info(symbol)
         if symbol_info is None:
-            self.logger.error(f"Symbol {symbol} not found")
+            self.logger.error(f"Symbol {symbol} not found.")
             return False
 
         if not symbol_info.visible:
@@ -192,99 +210,137 @@ class MT5Trader:
                 self.logger.error(f"Failed to add symbol {symbol} to the market watch.")
                 return False
 
+        # Price determination for order execution
         price = mt5.symbol_info_tick(symbol).ask if action == 'buy' else mt5.symbol_info_tick(symbol).bid
+        if price is None:
+            self.logger.error(f"No price available for executing trade on {symbol}.")
+            return False
+
+        # Calculate stop loss and take profit
         stop_loss_percentage = self.config['risk_management']['stop_loss']
         take_profit_percentage = self.config['risk_management']['take_profit']
 
         stop_loss = price * (1 - stop_loss_percentage) if action == 'buy' else price * (1 + stop_loss_percentage)
         take_profit = price * (1 + take_profit_percentage) if action == 'buy' else price * (1 - take_profit_percentage)
 
+        # Get current balance and calculate position size
         account_balance = self.get_account_balance()
         if account_balance is None:
             return False
+        
         position_size = self.calculate_position_size(
             self.config['risk_management']['max_risk_per_trade'],
             stop_loss_percentage,
             account_balance
         )
-
-        order_type = mt5.ORDER_TYPE_BUY if action == 'buy' else mt5.ORDER_TYPE_SELL
+        
         request = {
-            'action': mt5.TRADE_ACTION_DEAL,
-            'symbol': symbol,
-            'volume': position_size,
-            'type': order_type,
-            'price': price,
-            'sl': stop_loss,
-            'tp': take_profit,
-            'deviation': 10,
-            'magic': 234000,
-            'comment': 'Python script open',
-            'type_time': mt5.ORDER_TIME_GTC,
-            'type_filling': mt5.ORDER_FILLING_FOK,
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": position_size,
+            "type": mt5.ORDER_TYPE_BUY if action == 'buy' else mt5.ORDER_TYPE_SELL,
+            "price": price,
+            "sl": stop_loss,
+            "tp": take_profit,
+            "deviation": 10,
+            "magic": 234000,
+            "comment": "Trade based on predictions",
+            "type_filling": mt5.ORDER_FILLING_FOK,
+            "type_time": mt5.ORDER_TIME_GTC
         }
+
         result = mt5.order_send(request)
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            self.logger.error(f"Trade execution failed: {result.retcode} - {result.comment}")
-            self.send_email("Trade Execution Failed", f"Trade execution failed: {result.retcode} - {result.comment}")
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            error_msg = result.comment if result else "No result returned."
+            self.logger.error(f"Failed to send trade order for {symbol}: {error_msg}")
             return False
 
-        self.logger.info(f"Trade executed successfully: {action} {position_size} {symbol} at {price} SL: {stop_loss}, TP: {take_profit}")
+        self.logger.info(f"Trade executed: {action} {symbol} at {price} with volume {position_size}")
+        
+        # Logging expected profit/loss details
+        expected_profit = (take_profit - price) * position_size if action == 'buy' else (price - take_profit) * position_size
+        expected_loss = (price - stop_loss) * position_size if action == 'buy' else (stop_loss - price) * position_size
+        self.logger.info(f"Expected Profit: {expected_profit:.2f}, Expected Loss: {expected_loss:.2f}")
 
-        threading.Thread(target=self._wait_and_close_trade, args=(symbol, order_type, position_size, duration)).start()
+        # Update expected profit timeline
+        duration_minutes = self.config['trading_preferences'].get('trade_duration', 60)
+        profit_expected_at = datetime.now() + timedelta(minutes=duration_minutes)
+        self.logger.info(f"Profit can be expected around: {profit_expected_at.strftime('%Y-%m-%d %H:%M:%S')}")
 
         return True
 
-    def _wait_and_close_trade(self, symbol: str, order_type: int, position_size: float, duration: int) -> None:
-        """Wait for the specified duration and then close the trade."""
-        time.sleep(duration)
-        self.close_trade(symbol, order_type, position_size)
+    def manage_existing_trades(self, symbol: str, latest_prediction: float) -> None:
+        """Modify existing trades based on the new prediction."""
+        # Refresh existing trades
+        self.existing_trades = self.fetch_existing_trades()
 
-    def close_trade(self, symbol: str, order_type: int, position_size: float) -> None:
-        """Close a trade on MT5."""
-        close_order_type = mt5.ORDER_TYPE_SELL if order_type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
-        close_request = {
-            'action': mt5.TRADE_ACTION_DEAL,
-            'symbol': symbol,
-            'volume': position_size,
-            'type': close_order_type,
-            'deviation': 10,
-            'magic': 234000,
-            'comment': 'Python script close',
-            'type_time': mt5.ORDER_TIME_GTC,
-            'type_filling': mt5.ORDER_FILLING_FOK,
-        }
+        for trade in self.existing_trades:
+            if trade.symbol != symbol or (trade.type == mt5.ORDER_TYPE_BUY and latest_prediction <= self.BUY_THRESHOLD) or (trade.type == mt5.ORDER_TYPE_SELL and latest_prediction >= self.SELL_THRESHOLD):
+                continue  # Skip trades that do not need to be modified
+            
+            # Adjust the stops based on the new prediction
+            new_stop_loss = mt5.symbol_info_tick(symbol).ask * (1 - self.config['risk_management']['stop_loss']) if trade.type == mt5.ORDER_TYPE_BUY else mt5.symbol_info_tick(symbol).bid * (1 + self.config['risk_management']['stop_loss'])
+            new_take_profit = mt5.symbol_info_tick(symbol).ask * (1 + self.config['risk_management']['take_profit']) if trade.type == mt5.ORDER_TYPE_BUY else mt5.symbol_info_tick(symbol).bid * (1 - self.config['risk_management']['take_profit'])
 
-        result = mt5.order_send(close_request)
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            self.logger.error(f"Trade closure failed: {result.retcode} - {result.comment}")
-            self.send_email("Trade Closure Failed", f"Trade closure failed: {result.retcode} - {result.comment}")
-        else:
-            self.logger.info(f"Trade closed successfully for {symbol}")
+            modify_request = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "position": trade.ticket,
+                "sl": new_stop_loss,
+                "tp": new_take_profit,
+                "deviation": 10,
+                "magic": 234000,
+                "comment": "Modified based on new predictions"
+            }
+
+            result = mt5.order_send(modify_request)
+            if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+                error_msg = result.comment if result else "No result returned."
+                self.logger.error(f"Failed to modify trade {trade.ticket} for {symbol}: {error_msg}")
+            else:
+                self.logger.info(f"Modified trade {trade.ticket} with new SL: {new_stop_loss}, TP: {new_take_profit}")
+
+    def trade_on_symbol(self, symbol: str) -> None:
+        """Conduct trading operations for a single symbol based on predictions."""
+        self.logger.info(f"Starting predictions for {symbol}")
+        try:
+            prediction_tuple = make_predictions(symbol)  
+            if prediction_tuple is None or prediction_tuple[0] is None:
+                self.logger.error(f"No predictions returned for {symbol}. Skipping.")
+                return
+            
+            prediction_values = prediction_tuple[0]  
+            self.logger.info(f"Prediction for {symbol}: {prediction_values}")
+            latest_prediction = prediction_values[-1]
+
+            # Determine action based on the prediction
+            action = None
+            if latest_prediction > self.BUY_THRESHOLD:
+                action = 'buy'
+            elif latest_prediction < self.SELL_THRESHOLD:
+                action = 'sell'
+            else:
+                self.logger.info(f"Holding position for {symbol} as price is within the range.")
+                return
+
+            self.execute_trade(symbol, action)
+            self.manage_existing_trades(symbol, latest_prediction)
+
+        except Exception as e:
+            self.logger.error(f"Error processing symbol {symbol}: {e}")
 
     def trade_on_predictions(self) -> None:
-        """Execute trades based on model predictions."""
-        for symbol in self.config['assets']:
-            prediction, duration = make_predictions(symbol)
-            if prediction is not None:
-                if prediction[0] > 0:
-                    action = 'buy'
-                else:
-                    action = 'sell'
-                self.execute_trade(symbol, action, duration)
-            else:
-                self.logger.warning(f"No prediction available for {symbol}")
+        """Main function for trading based on predictions."""
+        with ThreadPoolExecutor(max_workers=5) as executor:  # Limit number of threads
+            executor.map(self.trade_on_symbol, self.config['assets'])
 
-    def reload_config(self) -> None:
-        """Reload the configuration from the YAML file."""
-        self.config = self.load_config()
-        self.credentials = self.get_mt5_credentials()
-        self.logger.info("Configuration reloaded successfully")
+if __name__ == '__main__':
+    config_path = 'config/config.yaml'  # Correct path for the config file
+    trader = MT5Trader(config_path)
 
-
-if __name__ == "__main__":
-    trader = MT5Trader('config/config.yaml')
     try:
         trader.trade_on_predictions()
+    except Exception as e:
+        trader.logger.error(f"An error occurred: {e}")
     finally:
         trader.shutdown_mt5()
+        gc.collect()  # Explicit garbage collection

@@ -1,190 +1,211 @@
+import os
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, Attention
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau, TensorBoard
-from sklearn.model_selection import train_test_split
-import os
-import pickle
-import json
 import logging
+import json
+import yaml
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, Conv1D, MaxPooling1D, Flatten, Input
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau, TensorBoard
+from tensorflow.keras.utils import to_categorical
 
-# Set up logging configuration
+# Suppress TensorFlow and other warnings
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+tf.get_logger().setLevel('ERROR')
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)  # Fixed the typo here
 
-def create_lstm_model(input_shape: tuple, units: list = [128, 64, 32], dropout_rate: float = 0.2) -> tf.keras.Model:
-    """
-    Create LSTM model architecture.
+def load_config(config_path: str):
+    with open(config_path, 'r') as yaml_file:
+        return yaml.safe_load(yaml_file)
+
+def create_hybrid_model(input_shape: tuple, config) -> tf.keras.Model:
+    # Input layer
+    inputs = Input(shape=input_shape)
+
+    # Accessing convolution parameters from config
+    conv_filters = config['conv_params']['conv_filters']
+    kernel_size = config['conv_params']['kernel_size']
+    pool_size = 2
+
+    # 1D Convolutional Layer followed by Max Pooling
+    x = Conv1D(filters=conv_filters, kernel_size=kernel_size, activation='relu')(inputs)
+    x = MaxPooling1D(pool_size=pool_size)(x)
+    x = Dropout(config['model_params']['lstm']['dropout'])(x)
+
+    # LSTM layers
+    for unit in config['model_params']['lstm']['layers']:
+        x = Bidirectional(LSTM(unit, return_sequences=True))(x)
+        x = Dropout(config['model_params']['lstm']['dropout'])(x)
+
+    # Flatten the output from LSTM layers
+    x = Flatten()(x)
+
+    # Use the num_classes from config
+    outputs = Dense(config['model_params']['num_classes'], activation='softmax')(x)
+
+    # Create the model
+    model = Model(inputs, outputs)
     
-    Args:
-        input_shape (tuple): Shape of input data (sequence_length, features)
-        units (list): List of units for each LSTM layer
-        dropout_rate (float): Dropout rate between layers
-        
-    Returns:
-        tf.keras.Model: Compiled LSTM model
-    """
-    model = Sequential()
+    # Prepare the optimizer based on the configuration
+    optimizer_type = config['model_params']['lstm']['optimizer']['type']
+    learning_rate = config['model_params']['lstm']['optimizer'].get('learning_rate', 0.001)
 
-    model.add(Bidirectional(LSTM(units[0], return_sequences=True, input_shape=input_shape)))
-    model.add(Dropout(dropout_rate))
+    # Initialize the optimizer
+    if optimizer_type == 'adam':
+        optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+    elif optimizer_type == 'sgd':
+        optimizer = tf.keras.optimizers.SGD(learning_rate=learning_rate)
+    elif optimizer_type == 'rmsprop':
+        optimizer = tf.keras.optimizers.RMSprop(learning_rate=learning_rate)
+    else:
+        raise ValueError(f"Optimizer type '{optimizer_type}' is not recognized.")
 
-    for unit in units[1:-1]:
-        model.add(Bidirectional(LSTM(unit, return_sequences=True)))
-        model.add(Dropout(dropout_rate))
-
-    model.add(Bidirectional(LSTM(units[-1], return_sequences=True)))
-    model.add(Attention())
-    model.add(Dropout(dropout_rate))
-    model.add(Dense(64, activation='relu'))
-    model.add(Dense(1))  # Output layer
+    # Compile the model
+    model.compile(optimizer=optimizer, 
+                  loss='categorical_crossentropy', 
+                  metrics=['accuracy'])
     
     return model
 
 def load_data(symbol: str):
-    """
-    Load preprocessed data for the given symbol.
-    
-    Args:
-        symbol (str): Trading symbol
-        
-    Returns:
-        tuple: Input features (X) and target values (y)
-    """
     try:
-        X = np.load(f'data/{symbol}_X.npy')
-        y = np.load(f'data/{symbol}_y.npy')
+        # Load processed input data and labels
+        data_directory = "data"
+        X = np.load(f'{data_directory}/{symbol}_X.npy')
+        y = np.load(f'{data_directory}/{symbol}_y.npy')
+        logger.info(f"Loaded data for {symbol}: X shape {X.shape}, y shape {y.shape}.")
         return X, y
     except Exception as e:
         logger.error(f"Error loading data for {symbol}: {e}")
         raise
 
-def train_model(symbol: str, epochs: int = 100, batch_size: int = 32, validation_split: float = 0.2, 
-                early_stopping_patience: int = 20):
-    """
-    Train LSTM model and return the latest prediction.
+def check_for_new_data(symbol: str) -> bool:
+    existing_data_path = f'data/{symbol}_X.npy'
+    new_data_path = f'data/{symbol}_X_new.npy'
     
-    Args:
-        symbol (str): Trading symbol (e.g., 'EURUSD')
-        epochs (int): Number of training epochs
-        batch_size (int): Training batch size
-        validation_split (float): Fraction of data to use for validation
-        early_stopping_patience (int): Number of epochs to wait before early stopping
-        
-    Returns:
-        float: The latest prediction for the symbol
-    """
-    model_path = f'models/{symbol}_best_model.keras'
-    log_dir = f"logs/{symbol}"
-    tensorboard_callback = TensorBoard(log_dir=log_dir, histogram_freq=1)
+    try:
+        if os.path.exists(existing_data_path) and os.path.exists(new_data_path):
+            existing_data = np.load(existing_data_path)
+            new_data = np.load(new_data_path)
+            return existing_data.shape[0] < new_data.shape[0]  # If new data has more rows
+        else:
+            logger.info("No existing or new data found.")
+            return False
+    except Exception as e:
+        logger.error(f"Error checking for new data for {symbol}: {e}")
+        return False
 
-    # Load or train the model
+def train_model(symbol: str, config, model_path: str = None) -> str:
+    model_path = model_path or f'models/{symbol}_best_model.keras'
+    log_dir = f"{config['system']['log_directory']}/{symbol}"
+
+    # Check for existing predictions
     if os.path.exists(model_path):
-        logger.info(f"Model for {symbol} already trained. Loading from {model_path}.")
+        logger.info(f"Loading existing model from {model_path}.")
         model = tf.keras.models.load_model(model_path)
+
+        # Check for new data
+        if check_for_new_data(symbol):
+            logger.info("New data detected. Retraining the model...")
+            existing_X, existing_y = load_data(symbol)
+            new_X, new_y = load_data(symbol)  # Load new data, assuming it has been processed
+            all_X = np.concatenate((existing_X, new_X))
+            all_y = np.concatenate((existing_y, new_y))
+        else:
+            logger.info("No new data detected. Continuing with existing model.")
+            all_X, all_y = load_data(symbol)
     else:
-        try:
-            X, y = load_data(symbol)
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+        logger.info("No existing model found. Training from scratch.")
+        
+        # Load data for training
+        all_X, all_y = load_data(symbol)
+        
+        # Create a new model since there was no existing model
+        input_shape = all_X.shape[1:]  # Assuming shape is (samples, time_steps, features)
+        model = create_hybrid_model(input_shape, config)
 
-            model = create_lstm_model(input_shape=(X.shape[1], X.shape[2]))
-            model.compile(optimizer='adam', loss='mse', metrics=['mae', 'mse'])
+    # Split the dataset
+    X_train, X_val, y_train, y_val = train_test_split(all_X, all_y, test_size=config['preprocessing']['train_test_split'], shuffle=False)
 
-            callbacks = [
-                EarlyStopping(monitor='val_loss', patience=early_stopping_patience, restore_best_weights=True),
-                ModelCheckpoint(model_path, monitor='val_loss', save_best_only=True),
-                ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6),
-                tensorboard_callback
-            ]
+    # Convert y_train and y_val to one-hot encoding
+    y_train_one_hot = to_categorical(y_train, num_classes=config['model_params']['num_classes'])
+    y_val_one_hot = to_categorical(y_val, num_classes=config['model_params']['num_classes'])
 
-            history = model.fit(
-                X_train, y_train,
-                epochs=epochs,
-                batch_size=batch_size,
-                validation_split=validation_split,
-                callbacks=callbacks,
-                verbose=1
-            )
+    # Define callbacks
+    callbacks = [
+        EarlyStopping(monitor='val_loss', patience=config['model_params']['lstm']['epochs'] // 10, restore_best_weights=True),
+        ModelCheckpoint(model_path, monitor='val_loss', save_best_only=True),
+        ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=config['model_params']['lstm']['epochs'] // 20, min_lr=1e-6),
+        TensorBoard(log_dir=log_dir, histogram_freq=1)
+    ]
 
-            # Save training history
-            with open(f'models/{symbol}_training_history.json', 'w') as f:
-                json.dump({key: [float(val) for val in values] for key, values in history.history.items()}, f)
-        except Exception as e:
-            logger.error(f"Error during training for {symbol}: {e}")
-            return None
+    # Fit the model
+    history = model.fit(
+        X_train, 
+        y_train_one_hot,
+        epochs=config['model_params']['lstm']['epochs'],
+        batch_size=config['model_params']['lstm']['batch_size'],
+        validation_data=(X_val, y_val_one_hot),
+        callbacks=callbacks,
+        verbose=1
+    )
 
+    save_training_history(symbol, history)
     return get_latest_prediction(symbol, model)
 
-def get_latest_prediction(symbol: str, model: tf.keras.Model) -> float:
-    """
-    Get the latest prediction for a symbol using the trained model.
-    
-    Args:
-        symbol (str): Trading symbol
-        model (tf.keras.Model): Pre-loaded model
-        
-    Returns:
-        float: Predicted price value
-    """
+def save_training_history(symbol: str, history):
+    with open(f'models/{symbol}_training_history.json', 'w') as f:
+        json.dump({key: [float(val) for val in values] for key, values in history.history.items()}, f)
+
+def get_latest_prediction(symbol: str, model: tf.keras.Model) -> str:
     try:
-        X = np.load(f'data/{symbol}_X.npy')
-        with open(f'data/{symbol}_scalers.pkl', 'rb') as f:
-            scalers = pickle.load(f)
-        close_scaler = scalers.get('Close')
-
-        if close_scaler is None:
-            logger.error(f"Scaler for 'Close' not found for {symbol}.")
-            return None
-
+        data_directory = "data"
+        X = np.load(f'{data_directory}/{symbol}_X.npy')
         latest_data = X[-1:]  # Take the last sequence
-        prediction = model.predict(latest_data, verbose=0)
+        predictions = model.predict(latest_data, verbose=0)
 
-        # Inverse transform the prediction
-        prediction_unscaled = close_scaler.inverse_transform(prediction)
-        return float(prediction_unscaled[0][0])
+        predicted_class = np.argmax(predictions, axis=1)[0]
+        signal_map = {0: 'SELL', 1: 'BUY', 2: 'HOLD'}  # Map indices to signals
+        return signal_map[predicted_class]
 
     except Exception as e:
         logger.error(f"Error getting latest prediction for {symbol}: {e}")
         return None
 
-def make_predictions(symbol: str) -> tuple:
-    """
-    Make predictions using the trained model for the given trading symbol.
-    
-    Args:
-        symbol (str): Trading symbol
-        
-    Returns:
-        tuple: (predicted price values, duration in seconds)
-    """
+def make_predictions(symbol: str) -> str:
     model_path = f'models/{symbol}_best_model.keras'
 
     if not os.path.exists(model_path):
         logger.warning(f"No model found for {symbol}. Please train the model first.")
-        return None, None  # Return None for both values if there is no model
+        return None 
 
     model = tf.keras.models.load_model(model_path)
-    X = np.load(f'data/{symbol}_X.npy')
-    with open(f'data/{symbol}_scalers.pkl', 'rb') as f:
-        scalers = pickle.load(f)
-    close_scaler = scalers.get('Close')
-
-    if close_scaler is None:
-        logger.error(f"Scaler for 'Close' not found for {symbol}.")
-        return None, None
+    data_directory = "data"
+    X = np.load(f'{data_directory}/{symbol}_X.npy')
 
     predictions = model.predict(X, verbose=0)
-    predictions_unscaled = close_scaler.inverse_transform(predictions)
-    return predictions_unscaled.flatten(), 3600  # Example duration of 1 hour; adjust if needed
+    predicted_classes = np.argmax(predictions, axis=1)
+
+    # Map to signals
+    signal_map = {0: 'SELL', 1: 'BUY', 2: 'HOLD'}
+    predicted_labels = [signal_map[c] for c in predicted_classes]
+
+    return predicted_labels[-1]  # Return the last predicted label
 
 if __name__ == "__main__":
     os.makedirs('models', exist_ok=True)
+    os.makedirs('data', exist_ok=True)
+    os.makedirs('logs', exist_ok=True)
 
-    symbols = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"]
+    # Load configurations
+    config = load_config('config/config.yaml')
+
+    symbols = config['assets']
 
     for symbol in symbols:
-        prediction = train_model(symbol)
+        prediction = train_model(symbol, config)
         if prediction is not None:
             logger.info(f"Latest prediction for {symbol}: {prediction}")
         else:
