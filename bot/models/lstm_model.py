@@ -7,8 +7,8 @@ import pickle
 import json
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, Conv1D, MaxPooling1D, Flatten, Input, Attention
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau, TensorBoard, LearningRateScheduler
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, Conv1D, MaxPooling1D, Flatten, Input
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau, TensorBoard
 
 # Suppress TensorFlow and other warnings
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
@@ -20,22 +20,22 @@ logging.getLogger('tensorflow').setLevel(logging.ERROR)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def create_hybrid_model(input_shape: tuple, units: list = [128, 64, 32], dropout_rate: float = 0.2) -> tf.keras.Model:
+def create_hybrid_model(input_shape: tuple, units: list = [128, 64], dropout_rate: float = 0.2) -> tf.keras.Model:
     """
     Create a hybrid CNN-LSTM model architecture.
-    
+
     Args:
         input_shape (tuple): Shape of input data (sequence_length, features)
         units (list): List of units for each LSTM layer
         dropout_rate (float): Dropout rate between layers
-        
+
     Returns:
         tf.keras.Model: Compiled hybrid CNN-LSTM model
     """
     inputs = Input(shape=input_shape)
-
+    
     # Convolutional layers
-    x = Conv1D(filters=64, kernel_size=3, activation='relu')(inputs)
+    x = Conv1D(filters=32, kernel_size=3, activation='relu')(inputs)
     x = MaxPooling1D(pool_size=2)(x)
     x = Dropout(dropout_rate)(x)
 
@@ -44,22 +44,20 @@ def create_hybrid_model(input_shape: tuple, units: list = [128, 64, 32], dropout
         x = Bidirectional(LSTM(unit, return_sequences=True))(x)
         x = Dropout(dropout_rate)(x)
 
-    # Attention layer
-    attention = Attention()([x, x])
-    x = Flatten()(attention)
-    x = Dense(64, activation='relu')(x)
+    x = Flatten()(x)
     outputs = Dense(1)(x)  # Output layer
 
     model = Model(inputs, outputs)
+    model.compile(optimizer='adam', loss='mse', metrics=['mae', 'mse'])
     return model
 
 def load_data(symbol: str):
     """
     Load preprocessed data for the given symbol.
-    
+
     Args:
         symbol (str): Trading symbol
-        
+
     Returns:
         tuple: Input features (X) and target values (y)
     """
@@ -71,18 +69,23 @@ def load_data(symbol: str):
         logger.error(f"Error loading data for {symbol}: {e}")
         raise
 
-def train_model(symbol: str, epochs: int = 10, batch_size: int = 32, validation_split: float = 0.2, 
-                early_stopping_patience: int = 20):
+def train_model(
+    symbol: str, 
+    epochs: int = 10, 
+    batch_size: int = 32, 
+    validation_split: float = 0.2, 
+    early_stopping_patience: int = 20
+):
     """
     Train hybrid CNN-LSTM model and return the latest prediction.
-    
+
     Args:
         symbol (str): Trading symbol (e.g., 'EURUSD')
         epochs (int): Number of training epochs
         batch_size (int): Training batch size
         validation_split (float): Fraction of data to use for validation
         early_stopping_patience (int): Number of epochs to wait before early stopping
-        
+
     Returns:
         float: The latest prediction for the symbol
     """
@@ -90,71 +93,53 @@ def train_model(symbol: str, epochs: int = 10, batch_size: int = 32, validation_
     log_dir = f"logs/{symbol}"
     tensorboard_callback = TensorBoard(log_dir=log_dir, histogram_freq=1)
 
-    # Always load new data for training
-    try:
-        new_X, new_y = load_data(symbol)
+    # Load new data for training
+    new_X, new_y = load_data(symbol)
 
-        # If the model exists, load it and get existing data
-        if os.path.exists(model_path):
-            logger.info(f"Model for {symbol} already exists. Loading from {model_path}.")
-            model = tf.keras.models.load_model(model_path)
+    # Check if the model exists and if the data is the same
+    if os.path.exists(model_path):
+        logger.info(f"Model for {symbol} already exists. Loading from {model_path}.")
+        model = tf.keras.models.load_model(model_path)
 
-            # Load existing training data; create new if not present
-            existing_X = np.load(f'data/{symbol}_X_existing.npy')
-            existing_y = np.load(f'data/{symbol}_y_existing.npy')
+        # Check if there's new data by comparing with the existing data on disk
+        existing_X = np.load(f'data/{symbol}_X_existing.npy')
+        existing_y = np.load(f'data/{symbol}_y_existing.npy')
 
-            # Combine existing data with new data
-            combined_X = np.concatenate((existing_X, new_X), axis=0)
-            combined_y = np.concatenate((existing_y, new_y), axis=0)
+        if np.array_equal(new_X, existing_X) and np.array_equal(new_y, existing_y):
+            logger.info(f"No new data available for {symbol}. Skipping training.")
+            return get_latest_prediction(symbol, model)
 
-            # Save combined data for the next training
-            np.save(f'data/{symbol}_X_existing.npy', combined_X)
-            np.save(f'data/{symbol}_y_existing.npy', combined_y)
+    # Proceed with training if model does not exist or if new data is present
+    logger.info(f"Training model for {symbol}.")
+    if not os.path.exists(model_path):
+        model = create_hybrid_model(input_shape=(new_X.shape[1], new_X.shape[2]))
 
-        else:
-            logger.info(f"Creating a new model for {symbol}.")
-            model = create_hybrid_model(input_shape=(new_X.shape[1], new_X.shape[2]))
-            combined_X, combined_y = new_X, new_y  # On first train, this is the data to use
+    callbacks = [
+        EarlyStopping(monitor='val_loss', patience=early_stopping_patience, restore_best_weights=True),
+        ModelCheckpoint(model_path, monitor='val_loss', save_best_only=True),
+        ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6),
+        tensorboard_callback
+    ]
 
-            # Initialize existing data files
-            logger.info(f"Creating initial empty data files for {symbol}.")
-            np.save(f'data/{symbol}_X_existing.npy', np.empty((0, new_X.shape[1], new_X.shape[2])))  # Shape for 3D array
-            np.save(f'data/{symbol}_y_existing.npy', np.empty((0,)))  # Assuming y is 1-D
+    # Split dataset for training and validation
+    X_train, X_val, y_train, y_val = train_test_split(new_X, new_y, test_size=validation_split, shuffle=False)
 
-        model.compile(optimizer='adam', loss='mse', metrics=['mae', 'mse'])
+    history = model.fit(
+        X_train, y_train,
+        epochs=epochs,
+        batch_size=batch_size,
+        validation_data=(X_val, y_val),
+        callbacks=callbacks,
+        verbose=1
+    )
 
-        callbacks = [
-            EarlyStopping(monitor='val_loss', patience=early_stopping_patience, restore_best_weights=True),
-            ModelCheckpoint(model_path, monitor='val_loss', save_best_only=True),
-            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6),
-            tensorboard_callback,
-            LearningRateScheduler(lambda epoch: 1e-3 * 10 ** (-epoch / 20))
-        ]
-
-        # Split the combined dataset for training and validation
-        X_train, X_val, y_train, y_val = train_test_split(combined_X, combined_y, test_size=validation_split, shuffle=False)
-
-        history = model.fit(
-            X_train, y_train,
-            epochs=epochs,
-            batch_size=batch_size,
-            validation_data=(X_val, y_val),
-            callbacks=callbacks,
-            verbose=1
-        )
-
-        save_training_history(symbol, history)
-
-    except Exception as e:
-        logger.error(f"Error during training for {symbol}: {e}")
-        return None
-
+    save_training_history(symbol, history)
     return get_latest_prediction(symbol, model)
 
 def save_training_history(symbol: str, history):
     """
     Save the training history of the model to a JSON file.
-    
+
     Args:
         symbol (str): Trading symbol
         history: Training history object
@@ -165,7 +150,7 @@ def save_training_history(symbol: str, history):
 def get_latest_prediction(symbol: str, model: tf.keras.Model) -> float:
     """
     Get the latest prediction for a symbol using the trained model.
-    
+
     Args:
         symbol (str): Trading symbol
         model (tf.keras.Model): Pre-loaded model
@@ -194,27 +179,10 @@ def get_latest_prediction(symbol: str, model: tf.keras.Model) -> float:
         logger.error(f"Error getting latest prediction for {symbol}: {e}")
         return None
 
-def load_scalers(symbol: str) -> dict:
-    """
-    Load scalers for the given symbol.
-    
-    Args:
-        symbol (str): Trading symbol
-        
-    Returns:
-        dict: Scalers associated with the symbol
-    """
-    try:
-        with open(f'data/{symbol}_scalers.pkl', 'rb') as f:
-            return pickle.load(f)
-    except Exception as e:
-        logger.error(f"Error loading scalers for {symbol}: {e}")
-        raise
-
 def make_predictions(symbol: str) -> tuple:
     """
     Make predictions using the trained model for the given trading symbol.
-    
+
     Args:
         symbol (str): Trading symbol
         
@@ -251,9 +219,9 @@ if __name__ == "__main__":
         # Initialize existing data files if they do not exist
         if not os.path.exists(f'data/{symbol}_X_existing.npy'):
             logger.info(f"Creating initial empty data files for {symbol}.")
-            # Update expected_shape to match the one used in preprocess_data.py
+            # Update the sequence length and features according to your preprocessing
             expected_sequence_length = 60  # This should match the sequence length used during preprocessing
-            expected_features = len(['Open', 'High', 'Low', 'Close', 'Volume', 'positive', 'negative', 'neutral', 'Returns', 'RSI', 'Momentum', 'ROC'])  # Count your feature columns
+            expected_features = 11  # Adjust this based on the number of features you are using
             np.save(f'data/{symbol}_X_existing.npy', np.empty((0, expected_sequence_length, expected_features)))  # Shape for 3D array
             np.save(f'data/{symbol}_y_existing.npy', np.empty((0,)))  # Assuming y is 1-D
 

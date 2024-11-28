@@ -6,9 +6,9 @@ api_keys:
 
 # MT5 Configuration
 mt5_credentials:
-  account_number: "213201143"
-  password: "Y4&seP6U"
-  server: "OctaFX-Demo"
+  account_number: "79486275"
+  password: "26122001As@"
+  server: "Exness-MT5Trial8"
 
 # Asset Configuration
 assets:
