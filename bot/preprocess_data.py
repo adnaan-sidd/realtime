@@ -38,7 +38,6 @@ class Config:
         self.validate_config()
         self.setup_directories()
         self.load_config_attributes()
-
         logger.info("Configuration loaded successfully")
 
     def validate_config(self):
@@ -68,7 +67,6 @@ class DataLoader:
             yfinance_file = self.get_yfinance_file(data_dir)
             logger.info(f"Loading yfinance data from: {yfinance_file}")
             yfinance_data = self.load_yfinance_data(yfinance_file)
-
             candles_data = self.load_candles_data()
             market_data = pd.concat([yfinance_data, candles_data]).drop_duplicates().sort_index()
 
@@ -244,13 +242,21 @@ class SequencePreparation:
         return scalers, scaled_data
 
     def create_sequences(self, scaled_data: pd.DataFrame, feature_columns: list) -> Tuple[np.ndarray, np.ndarray]:
+        logger.info("Creating sequences and labels")
         X, y = [], []
         data_values = scaled_data[feature_columns].values
         close_values = scaled_data['Close'].values
 
         for i in range(len(data_values) - self.sequence_length):
             X.append(data_values[i:(i + self.sequence_length)])
-            y.append(close_values[i + self.sequence_length])
+
+            # Create labels: Buy, Sell, Hold based on future price change
+            if close_values[i + self.sequence_length] > close_values[i + self.sequence_length - 1]:
+                y.append(1)  # Buy
+            elif close_values[i + self.sequence_length] < close_values[i + self.sequence_length - 1]:
+                y.append(0)  # Sell
+            else:
+                y.append(2)  # Hold
 
         return np.array(X), np.array(y)
 
@@ -265,6 +271,16 @@ class PreprocessingPipeline:
             data_loader = DataLoader(symbol, self.config)
             feature_engine = FeatureEngine(self.config)
             sequence_prep = SequencePreparation(self.config)
+
+            # Check for existing processed data
+            existing_X_file = f'data/{symbol}_X.npy'
+            existing_y_file = f'data/{symbol}_y.npy'
+
+            new_data_available = self.check_for_new_data(symbol)
+
+            if os.path.exists(existing_X_file) and os.path.exists(existing_y_file) and not new_data_available:
+                logger.info(f"Processed data already exists for {symbol}. Skipping preprocessing.")
+                return np.load(existing_X_file), np.load(existing_y_file), self.load_scalers(symbol)
 
             # Load data
             merged_data = data_loader.load_and_merge_data(sentiment_file)
@@ -286,12 +302,65 @@ class PreprocessingPipeline:
             logger.error(f"Error processing symbol {symbol}: {e}")
             raise
 
+    def preprocess_new_data(self, symbol: str, new_data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, dict]:
+        """Process new data for a specific symbol and prepare for model updating."""
+        try:
+            logger.info(f"Processing new data for {symbol}...")
+            
+            feature_engine = FeatureEngine(self.config)
+            sequence_prep = SequencePreparation(self.config)
+
+            # Calculate technical indicators on the new data
+            data_with_indicators = feature_engine.calculate_technical_indicators(new_data)
+            data_filled = data_with_indicators.ffill().bfill()
+
+            # Prepare sequences from the filled data
+            X, y, scalers = sequence_prep.prepare_sequences(data_filled)
+
+            logger.info(f"New data processed for {symbol}. X shape: {X.shape}, y shape: {y.shape}")
+
+            return X, y, scalers
+
+        except Exception as e:
+            logger.error(f"Error processing new data for {symbol}: {str(e)}")
+            raise
+
+    def check_for_new_data(self, symbol: str) -> bool:
+        # Check if any newer raw files exist in the expected directories
+        data_dir = self.config.config['system']['data_directory']
+        yfinance_file = self.get_yfinance_file(data_dir, symbol)
+
+        if os.path.exists(yfinance_file):
+            # Check the last modified time of the new data file
+            new_data_time = os.path.getmtime(yfinance_file)
+
+            # Check the existing processed files' modification times
+            existing_X_file = f'data/{symbol}_X.npy'
+            existing_y_file = f'data/{symbol}_y.npy'
+
+            if os.path.exists(existing_X_file):
+                existing_X_time = os.path.getmtime(existing_X_file)
+                return new_data_time > existing_X_time  # Newer raw data found
+
+        return False  # No new data or files not found
+
+    def get_yfinance_file(self, data_dir, symbol):
+        if symbol == "XAUUSD":
+            return os.path.join(data_dir, 'yfinance', 'gold_yf.csv')
+        return os.path.join(data_dir, 'yfinance', f'{symbol}_yf.csv')
+
+    def load_scalers(self, symbol: str) -> dict:
+        scaler_path = f'data/{symbol}_scalers.pkl'
+        if os.path.exists(scaler_path):
+            with open(scaler_path, 'rb') as f:
+                return pickle.load(f)
+        return {}
+
     def save_processed_data(self, symbol: str, X: np.ndarray, y: np.ndarray, scalers: dict):
         np.save(f'data/{symbol}_X.npy', X)
         np.save(f'data/{symbol}_y.npy', y)
 
-        data_dir = self.config.config['system']['data_directory']
-        scaler_path = os.path.join(data_dir, f'{symbol}_scalers.pkl')
+        scaler_path = f'data/{symbol}_scalers.pkl'
         with open(scaler_path, 'wb') as f:
             pickle.dump(scalers, f)
         logger.info(f"Saved scalers to: {scaler_path}")
@@ -314,17 +383,6 @@ def main():
         if not os.path.exists(sentiment_file):
             logger.error(f"Sentiment data file not found: {sentiment_file}")
             raise FileNotFoundError(sentiment_file)
-
-        # Cleanup existing data files
-        for symbol in config.assets:
-            existing_X_file = f'data/{symbol}_X_existing.npy'
-            existing_y_file = f'data/{symbol}_y_existing.npy'
-            if os.path.exists(existing_X_file):
-                logger.info(f"Removing existing file: {existing_X_file}")
-                os.remove(existing_X_file)
-            if os.path.exists(existing_y_file):
-                logger.info(f"Removing existing file: {existing_y_file}")
-                os.remove(existing_y_file)
 
         pipeline = PreprocessingPipeline(config)
         pipeline.process_all_symbols(sentiment_file)
